@@ -38,6 +38,9 @@ class BM25Index:
     def chunk_count(self) -> int:
         return len(self._chunks)
 
+    def chunks(self) -> list[Chunk]:
+        return list(self._chunks)
+
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as fh:

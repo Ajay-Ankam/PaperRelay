@@ -1,4 +1,4 @@
-﻿# Secrets and private brief
+# Secrets and private brief
 .env
 .env.*
 !.env.example
@@ -33,5 +33,11 @@ Thumbs.db
 # Packaging output; evidence is intentionally tracked separately
 submission/
 *.log
+# Offline test-double runs are never evidence; real runs under evidence/real/ stay trackable
+evidence/offline-double/
+evidence/client-only/
+# Ledger OS lock and atomic-write temp file (call_ledger.json itself is evidence)
+evidence/real/call_ledger.lock
+evidence/real/call_ledger.tmp
 # docs/*.md
 # docs/FIRST_PROMPT.txt

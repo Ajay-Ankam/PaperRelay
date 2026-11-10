@@ -1,11 +1,15 @@
 """PDF text extraction with page/passage provenance.
 
-Known extraction defects (pypdf on these papers):
-- 1706.03762v7 (Attention Is All You Need): two-column ACL layout causes pypdf to
-  interleave column text on some pages; equations extract as garbled unicode symbols.
-- 2410.00037v1 (Moshi): tables and figures lose spatial structure; numeric cells may merge.
-- 2507.07955v2 (Dynamic Chunking): headers/footers contaminate body text on some pages.
-Run scripts/inspect_extraction.py to view representative samples before indexing.
+Extracted text is untrusted data: it is indexed and quoted, never followed as instructions.
+
+Defects observed on the pinned PDFs (see docs/progress.md):
+- Adjacent text runs merge without separators (e.g. author emails and names on p1 of
+  1706.03762v7).
+- Table cells merge and exponents lose superscripts ("ModelBLEU", "2.3?10191.4?1020" when
+  printed on a cp1252 console; the stored text keeps the original Unicode symbols).
+- Some accented names split around the diacritic (2410.00037v1 p1).
+Printing math symbols can fail on a cp1252 console; that is a console encoding issue,
+not corrupted extraction. Run scripts/inspect_extraction.py to view samples.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ class Chunk:
     chunk_id: str        # "{arxiv_version}:p{page:04d}:c{idx:06d}"
     arxiv_version: str
     page: int            # 1-based
-    start_char: int      # byte offset within page text
+    start_char: int      # character offset within pypdf-extracted page text
     end_char: int
     text: str
 
@@ -68,16 +72,26 @@ def extract_pages(pdf_path: Path, arxiv_version: str) -> list[tuple[int, str]]:
     return [(i + 1, reader.pages[i].extract_text() or "") for i in range(len(reader.pages))]
 
 
+def chunk_pages(
+    pages: list[tuple[int, str]],
+    arxiv_version: str,
+    chunk_size: int,
+    overlap: int,
+) -> list[Chunk]:
+    """Chunk already-extracted pages; chunk_size and overlap are in characters."""
+    all_chunks: list[Chunk] = []
+    for page_num, page_text in pages:
+        all_chunks.extend(
+            _split_page(page_text, arxiv_version, page_num, chunk_size, overlap, len(all_chunks))
+        )
+    return all_chunks
+
+
 def extract_chunks(
     pdf_path: Path,
     arxiv_version: str,
     chunk_size: int,
     overlap: int,
 ) -> list[Chunk]:
-    """Extract all chunks from one PDF with the given chunking parameters."""
-    all_chunks: list[Chunk] = []
-    for page_num, page_text in extract_pages(pdf_path, arxiv_version):
-        all_chunks.extend(
-            _split_page(page_text, arxiv_version, page_num, chunk_size, overlap, len(all_chunks))
-        )
-    return all_chunks
+    """Extract all chunks from one PDF; chunk_size and overlap are in characters."""
+    return chunk_pages(extract_pages(pdf_path, arxiv_version), arxiv_version, chunk_size, overlap)
