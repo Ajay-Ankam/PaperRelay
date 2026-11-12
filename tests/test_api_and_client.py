@@ -169,9 +169,9 @@ async def test_real_socket_disconnect_cancels_server_pipeline(tmp_path):
             max_requests=1, sleep_between_s=0.0, client_timeout_s=0.5,
             server_record_wait_s=3.0, out_dir=str(tmp_path / "unused"),
         )
-        t0 = time.monotonic()
+        t0 = time.perf_counter()
         [row] = await smoke.run(args)
-        elapsed = time.monotonic() - t0
+        elapsed = time.perf_counter() - t0
     finally:
         server.should_exit = True
         await task

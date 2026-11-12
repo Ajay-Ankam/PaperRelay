@@ -81,7 +81,7 @@ class ScriptedProvider:
         self.requests.append(request)
         item = self.script[request.stage].pop(0)
         step = item if isinstance(item, Step) else Step(item)
-        t_send = time.monotonic()
+        t_send = time.perf_counter()
         try:
             async with asyncio.timeout(ctx.timeout_s):
                 await asyncio.sleep(step.delay_s)
@@ -106,7 +106,7 @@ class ScriptedProvider:
             raise ProviderHTTPError(call, "http_503")
         content = step.payload if isinstance(step.payload, str) else json.dumps(step.payload)
         call = make_call(self, request, ctx, status="ok", t_send=t_send, streamed=True,
-                         first_content=time.monotonic(), usage=step.usage,
+                         first_content=time.perf_counter(), usage=step.usage,
                          finish_reason=step.finish_reason)
         ctx.record(call)
         return ChatResult(content, call)

@@ -80,7 +80,7 @@ class OfflineExtractiveProvider:
         return {"verdicts": verdicts}
 
     async def complete(self, request: ChatRequest, ctx: CallContext) -> ChatResult:
-        t_send = time.monotonic()
+        t_send = time.perf_counter()
         user = request.messages[-1]["content"]
         handler = {"interpret": self._interpret, "draft": self._draft, "verify": self._verify}
         content = json.dumps(handler[request.stage.removesuffix("_expanded")](user))

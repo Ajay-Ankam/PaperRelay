@@ -54,6 +54,9 @@ class ProviderCall(BaseModel):
     error: str | None = None
     rate_limit_headers: dict[str, str] = Field(default_factory=dict)  # allow-listed, redacted
     retry_after: str | None = None
+    # Milestone 3: how the failure was classified for the shared retry budget.
+    retryable: bool | None = None  # None = not classified (ok calls, or no retry policy)
+    limit_scope: Literal["minute", "day"] | None = None  # for 429s, when determinable
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +104,13 @@ class PipelineResult(BaseModel):
     tokens_in: int = 0  # sum of known prompt tokens across all calls, including failed ones
     tokens_out: int = 0
     unknown_usage_calls: int = 0
+    # Milestone 3 capacity/retry accounting (server clock, ms). Within one request the
+    # pipeline is sequential, so queue_wait + rate_wait + retry_wait + working = server total.
+    retries: int = 0  # provider attempts beyond the first, summed over stages (shared budget)
+    queue_wait_ms: float = 0.0  # received -> admitted (admission queue)
+    rate_wait_ms: float = 0.0  # waits for minute request/token budget before calls
+    retry_wait_ms: float = 0.0  # backoff sleeps between attempts
+    queue_peak_observed: int | None = None  # max admission-queue depth seen while queued
     # Server-side clocks only; client-observed first_token_ms is recorded by the client.
     server_first_answer_emit_ms: float | None = None
     server_total_ms: float = 0.0
@@ -122,6 +132,15 @@ class EventKind(str, Enum):
     VERIFICATION_START = "verification_start"
     VERIFICATION_PASS = "verification_pass"
     VERIFICATION_FAIL = "verification_fail"
+    # Milestone 3 capacity/retry spans (sent to the client as progress; never answer text)
+    QUEUED = "queued"  # payload: queue_depth, in_flight
+    ADMITTED = "admitted"  # payload: queue_wait_ms, in_flight
+    RATE_WAIT = "rate_wait"  # payload: stage, wait_ms, scope ("minute_requests"|"minute_tokens")
+    CALL_START = "call_start"  # payload: stage, attempt
+    CALL_END = "call_end"  # payload: stage, attempt, status
+    RETRY_WAIT = "retry_wait"  # payload: stage, attempt, delay_ms, cause, retry_after
+    TOOL_START = "tool_start"  # payload: tool, attempt
+    TOOL_END = "tool_end"  # payload: tool, attempt, status
     # answer_token carries checked answer text; only emitted after verification_pass
     ANSWER_TOKEN = "answer_token"
     # terminal kinds

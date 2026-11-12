@@ -131,7 +131,7 @@ class _Run:
     def __init__(self, req: PipelineRequest, deps: PipelineDeps):
         self.req = req
         self.deps = deps
-        self.t0 = time.monotonic()
+        self.t0 = time.perf_counter()
         self.deadline_at = self.t0 + deps.deadline_s
         self.start_utc = _utc()
         self.setting = deps.retriever.config(req.retrieval_setting).name
@@ -144,7 +144,7 @@ class _Run:
     # ------------------------------------------------------------------ plumbing
 
     def _ms(self) -> float:
-        return round((time.monotonic() - self.t0) * 1000, 3)
+        return round((time.perf_counter() - self.t0) * 1000, 3)
 
     def emit(self, kind: EventKind, send: bool = True, **payload: Any) -> PipelineEvent:
         event = PipelineEvent(request_id=self.req.request_id, kind=kind, ts_ms=self._ms(),
@@ -167,7 +167,7 @@ class _Run:
         request = ChatRequest(stage, messages, max_tokens, schema_name, schema)
         attempt = 1
         while True:
-            remaining = self.deadline_at - time.monotonic()
+            remaining = self.deadline_at - time.perf_counter()
             ctx = CallContext(
                 request_id=self.req.request_id, request_t0=self.t0,
                 timeout_s=max(0.001, min(self.deps.call_timeout_s, remaining)),
@@ -356,7 +356,7 @@ class _Run:
         if isinstance(err, ProviderTimeout):
             # The call timeout is clamped to the remaining deadline; when both expire
             # together, report the request deadline regardless of timer ordering.
-            if time.monotonic() >= self.deadline_at - 0.05:
+            if time.perf_counter() >= self.deadline_at - 0.05:
                 return "timeout", "request_deadline"
             return "timeout", f"provider_call_timeout:{stage}"
         if isinstance(err, CallCeilingReached):

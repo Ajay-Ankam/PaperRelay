@@ -124,7 +124,7 @@ async def ask_once(client: httpx.AsyncClient, question: str, retrieval_setting: 
         "first_progress_ms": None, "events": [],
     }
     terminal: dict[str, Any] | None = None
-    t0 = time.monotonic()
+    t0 = time.perf_counter()
     body = {"question": question, "retrieval_setting": retrieval_setting, "request_id": request_id}
     obs["parse_errors"] = []
     try:
@@ -136,7 +136,7 @@ async def ask_once(client: httpx.AsyncClient, question: str, retrieval_setting: 
                 async for line in resp.aiter_lines():
                     if not line.strip():
                         continue
-                    elapsed = (time.monotonic() - t0) * 1000
+                    elapsed = (time.perf_counter() - t0) * 1000
                     try:
                         event = json.loads(line)
                         kind = event["kind"]
@@ -163,7 +163,7 @@ async def ask_once(client: httpx.AsyncClient, question: str, retrieval_setting: 
     except httpx.HTTPError as exc:
         obs["http_error"] = type(exc).__name__
         obs["client_reason"] = f"client_transport_error:{type(exc).__name__}"
-    obs["total_ms"] = (time.monotonic() - t0) * 1000
+    obs["total_ms"] = (time.perf_counter() - t0) * 1000
     return obs, terminal
 
 
@@ -194,10 +194,10 @@ async def _await_server_record(run_dir: Path, request_id: str,
                                wait_s: float) -> dict[str, Any] | None:
     """After an abandoned request the server writes its record only once cancellation
     completes, so poll briefly instead of racing it."""
-    deadline = time.monotonic() + wait_s
+    deadline = time.perf_counter() + wait_s
     while True:
         record = _server_record(run_dir, request_id)
-        if record is not None or time.monotonic() >= deadline:
+        if record is not None or time.perf_counter() >= deadline:
             return record
         await asyncio.sleep(0.1)
 
