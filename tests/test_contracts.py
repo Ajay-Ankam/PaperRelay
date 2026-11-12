@@ -1,65 +1,56 @@
-"""Contract schema validation – round-trip and boundary checks."""
+"""Contract schema validation – boundary checks on shared types."""
 
 import pytest
 from pydantic import ValidationError
 
 from paperrelay.contracts import (
+    TERMINAL_KINDS,
     Citation,
     EventKind,
     PipelineEvent,
     PipelineRequest,
     PipelineResult,
-    ProviderResult,
+    ProviderCall,
+    Usage,
 )
 
 
-def test_provider_result_requires_status():
+def test_provider_call_rejects_unknown_status():
     with pytest.raises(ValidationError):
-        ProviderResult(request_id="x", status="unknown_status", total_ms=100)
+        ProviderCall(request_id="x", stage="draft", provider="p", source="real", model="m",
+                     status="weird", streamed=True, send_offset_ms=0, total_ms=1)
 
 
-def test_provider_result_ok():
-    r = ProviderResult(request_id="abc", status="ok", total_ms=250.0)
-    assert r.retries == 0
-    assert r.upstream_429_count == 0
-    assert r.provider_first_token_ms is None
+def test_usage_unknown_is_not_complete():
+    assert not Usage().complete
+    assert not Usage(prompt_tokens=3).complete
+    assert Usage(prompt_tokens=3, completion_tokens=0).complete
 
 
-def test_pipeline_request_defaults():
-    req = PipelineRequest(question="What is attention?")
-    assert req.retrieval_setting == "default"
-    assert req.deadline_ms == 30_000.0
-    assert len(req.request_id) > 0
-
-
-def test_pipeline_result_refused():
-    res = PipelineResult(request_id="r1", refused=True)
-    assert res.answer is None
-    assert res.citations == []
-
-
-def test_citation_requires_passage():
+def test_pipeline_request_bounds():
+    assert PipelineRequest(question="What is attention?").retrieval_setting == "default"
     with pytest.raises(ValidationError):
-        Citation(arxiv_version="1706.03762v7")
+        PipelineRequest(question="")
+    with pytest.raises(ValidationError):
+        PipelineRequest(question="x" * 2001)
 
 
-def test_citation_ok():
-    c = Citation(arxiv_version="1706.03762v7", page=3, passage="Attention is all you need.")
-    assert c.page == 3
+def test_result_source_restricted():
+    with pytest.raises(ValidationError):
+        PipelineResult(request_id="r", status="refused", source="fake", model="m",
+                       retrieval_setting="medium")
 
 
-def test_event_kind_answer_token_is_not_queued():
-    assert EventKind.ANSWER_TOKEN != EventKind.QUEUED
+def test_citation_requires_provenance():
+    with pytest.raises(ValidationError):
+        Citation(arxiv_version="1706.03762v7", passage="x")
+
+
+def test_answer_token_is_not_terminal_and_terminal_kinds_are_exhaustive():
+    assert EventKind.ANSWER_TOKEN not in TERMINAL_KINDS
+    assert {k.value for k in TERMINAL_KINDS} == {"done", "refused", "error", "timeout", "cancelled"}
 
 
 def test_pipeline_event_round_trip():
     ev = PipelineEvent(request_id="r1", kind=EventKind.DONE, ts_ms=512.0)
-    dumped = ev.model_dump()
-    ev2 = PipelineEvent(**dumped)
-    assert ev2.kind == EventKind.DONE
-    assert ev2.ts_ms == 512.0
-
-
-def test_pipeline_event_payload_defaults_empty():
-    ev = PipelineEvent(request_id="r2", kind=EventKind.QUEUED, ts_ms=0.0)
-    assert ev.payload == {}
+    assert PipelineEvent(**ev.model_dump()).terminal

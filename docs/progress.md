@@ -121,7 +121,7 @@ product" -- a sanity check, not an evaluated quality measure.
 
 ---
 
-## Git state (verified 2026-11-10 audit)
+## Git state at the time of the audit (history; see Milestone 2 for current state)
 
 Branch / commit graph (after fetch):
   5275223  chore: add handoff setup files and paper manifest         [main, origin/main base]
@@ -140,33 +140,175 @@ feat/retrieval after the audit.
 
 ---
 
+## Milestone 2 -- feat/pipeline (implemented 2026-11-10; awaiting human testing)
+
+### Git integration (verified)
+- Audit docs committed on feat/retrieval as 2bbfba0 and pushed.
+- Local main fast-forwarded to origin/main (c1730fa, PR #1). Bootstrap was not merged again.
+- feat/retrieval (which includes defd7eb) merged into main with --no-ff as d1f0d40, after
+  ruff, mypy and 43/43 tests passed on the merge result. main pushed.
+- feat/pipeline created from d1f0d40. It is not merged into main; that waits on human testing.
+
+### Implemented
+- Pipeline (src/paperrelay/pipeline/runner.py): interpret (model) -> BM25 retrieval tool ->
+  draft (model) -> at most one evidence expansion (changed query, doubled top_k, second
+  draft) -> deterministic citation validation -> verify (model) -> post-verification delivery.
+  At most 4 provider calls per request. No retries (NoRetry policy is the Milestone 3 hook).
+- One request deadline (default 60 s) covers all stages. Each call's timeout is capped by the
+  remaining deadline. Client disconnect cancels the pipeline task and in-flight HTTP call,
+  and both are logged as cancelled.
+- Every branch ends in one terminal event: done, refused, error (including rate_limited),
+  timeout; cancelled is logged only. Insufficient evidence gives a refusal that does not
+  claim absence. Verification transport or format failure gives an operational error.
+- Draft text, search queries and verifier verdicts stay in server logs. Answer text is
+  streamed only after verification passes, labelled delivery=post_verification.
+- Providers: GroqProvider (raw httpx, one shared AsyncClient, include_reasoning=false,
+  reasoning deltas ignored, max_completion_tokens, SSE parsing with malformed-stream
+  detection, allow-listed rate-limit headers and retry-after). OfflineExtractiveProvider is a
+  deterministic double labelled offline-double. CeilingGuardProvider plus CallLedger is a
+  persistent hard ceiling, reserved before any network I/O.
+- Real calls require PAPERRELAY_PROVIDER=groq, PAPERRELAY_REAL_CALL_CEILING and
+  PAPERRELAY_RUN_ID.
+- Measurement: server writes calls.jsonl, events.jsonl, requests.jsonl and run_meta.json
+  (git revision, config hash, prompt version, index meta) under evidence/<source>/<run_id>/.
+  The client runner (python -m paperrelay.client.smoke) is the only writer of results.csv
+  (required columns in order, plus metrics.md extensions). It measures first_token_ms
+  (first answer_token at the client) and total_ms. Unknown usage is left blank, never 0.
+- Indexes: build_index.py now verifies manifest SHA-256 and size, extracts each PDF once,
+  and writes index_meta.json. The server checks those hashes against the manifest at
+  startup and never extracts PDFs during a request. Pickles are local generated artifacts only.
+- Streamlit: an HTTP client of /config and /ask. It shows progress, the checked answer,
+  citation expanders, and refusal/error states, plus an offline-double warning banner.
+- Groq parameters checked against console.groq.com docs on 2026-11-10. Key finding: json_schema
+  structured outputs cannot stream, so the default mode streams JSON requested in the prompt.
+
+### Independent review findings and resolutions
+A quality-reviewer subagent inspected the first implementation (read-only). Resolutions:
+1. Verifier verdicts where `supported` and `reason` disagree: a claim now passes only when
+   `supported` is true AND `reason` is "supported". Tested.
+2. Client timeout was recorded as a generic error: it is now status `timeout`, reason
+   `client_abandoned`. Other transport errors carry their exception name, and unparseable
+   stream lines are recorded and skipped. Tested.
+3. results.csv was written once at the end of a run: it is now appended per request, so
+   an interrupted run keeps its completed rows.
+4. Disconnect cancellation was only tested by closing the generator directly. The API now wraps
+   the stream in `contextlib.aclosing`, and a test through a real uvicorn socket shows that a
+   client which gives up after 0.5 s makes the server cancel the in-flight call
+   (`requests.jsonl`: cancelled / client_disconnected; `calls.jsonl`: ok, cancelled).
+5. / 6. The call ledger lived per run directory, and its writes were not atomic. It is now one
+   file (`evidence/real/call_ledger.json`) with per-run entries. Writes are atomic (temp file +
+   os.replace). A run's ceiling can be lowered but never raised. An OS lock stops a second
+   process from using it. Requests are admitted only if 4 calls remain after other admitted
+   requests' holds. An unreadable ledger is an error, never a reset. Tested.
+7. A provider timeout fired by the deadline clamp was reported as a call timeout: it is now
+   reported as `request_deadline`. Tested.
+8. Timing assertion widened (>= 250 ms, plus an explicit ordering check) for coarse Windows timers.
+9. httpx timeouts are now ProviderTimeout. Connect/pool failures are recorded as `sent=false`.
+   Tested.
+10. provider_first_token_ms in results.csv is documented as the first sent call (interpret)
+    measured from that call's send; a real 0.0 is no longer blanked. Tested.
+11. Token columns were blank when no terminal event reached the client: they now fall back to
+    the server's request record, so tokens already spent still count. Tested.
+12. Ceiling refusals now use status `rate_limited` (metrics.md admission rule) with reasons
+    `local_call_ceiling_insufficient_for_request` / `local_call_ceiling_reached`. Tested.
+13. `finish_reason` is recorded per call. Output cut at the token limit is reported as
+    `truncated_model_output:<stage>`, including the case where reasoning used the whole
+    budget and no content arrived. Tested.
+14. The server now refuses indexes whose recorded chunk size/overlap differ from the code's
+    settings, or whose settings were not recorded. Tested.
+15. Streamlit rendered answer text as Markdown: it now uses plain text. A non-200 response
+    shows the body and skips stream parsing. Unreadable lines are counted.
+16. BM25 search runs in a worker thread so it does not block the event loop. The interpret
+    output limit was raised to 600 tokens.
+Also found while fixing: `PipelineRunner.stream` cancelled its pending queue getter without
+awaiting it ("Event loop is closed" warning). All cancellations are now awaited, and the suite
+runs with unraisable-exception warnings treated as errors.
+
+### Checks run (verified)
+- ruff check src tests: clean. mypy (strict, 24 files): clean.
+- pytest full suite including PDF integration tests, with
+  `-W error::pytest.PytestUnraisableExceptionWarning`: 110 passed, three consecutive runs
+  (about 50 s each). Remaining warnings are third-party deprecation notices
+  (starlette testclient, websockets).
+- End-to-end offline run after the fixes: uvicorn (port 8765) with the offline double plus the
+  smoke client over real HTTP. One request answered after verification, one
+  insufficient_evidence refusal, results.csv written under evidence/offline-double/ (git-ignored).
+- In an earlier offline run, the double's "answer" was a verbatim sentence about varying the
+  number of heads, which does not answer the question. This shows that substring
+  "verification" checks support, not correctness.
+- `ruff check scripts` reports a pre-existing import-order issue in scripts/check_commit.py
+  (unchanged on this branch). CI lints only src and tests.
+
+### Limitations / open risks
+- No real Groq call has been made. Real behaviour (JSON compliance, latency, usage reporting
+  in streams, 429 format) is unobserved.
+- Groq limit figures (30 RPM, 1K RPD, 8K TPM, 200K TPD for gpt-oss-20b) come from the docs
+  page, under Developer-plan wording. The free-tier values are unconfirmed.
+- Model verification is fallible. It is not proof of factual accuracy.
+- No retries, admission queue, minute/day reservations or stand-in yet (Milestone 3).
+- Single API worker: request admission holds are in memory. The ledger's OS lock makes a
+  second real-provider process refuse to start rather than share the budget.
+- The client reads server JSONL from the local evidence folder to fill extension columns.
+  If the client runs on another machine, those columns stay blank.
+- Table and equation text extraction defects (above) are unmitigated. Their effect on
+  numeric questions is not yet measured.
+
+---
+
+## Real smoke test -- real-smoke-20261112-01 (run by Ajay, 2026-11-12)
+
+Human-reported results, verified by the assistant against `evidence/real/real-smoke-20261112-01/`
+(results.csv, requests.jsonl, calls.jsonl):
+
+| Question | Outcome | first_token_ms | total_ms | tokens in/out | calls |
+|---|---|---|---|---|---|
+| How many parallel attention heads does the base Transformer use? | answered: "The base Transformer uses eight parallel attention heads. [1]" | 5484.0 | 5484.0 | 1699 / 177 | interpret, draft, verify |
+| What learning rate did the original BERT paper use for pre-training? | refused: insufficient_evidence (after one expansion) | not applicable | 2218.0 | 3291 / 144 | interpret, draft, draft_expanded |
+
+- Per-call provider first content (ms, from send): interpret 2671.0 and 531.0; draft 2078.0
+  and 468.0; draft_expanded 1000.0; verify 500.0. Every call's first content arrived within
+  about 16-47 ms of its end: with prompt-requested JSON and hidden reasoning, content
+  appears only after reasoning finishes.
+- Header-advertised values (from the redacted allow-listed headers): limit-requests 1000
+  (RPD per Groq docs), limit-tokens 8000 (TPM per Groq docs). This is header evidence,
+  not an observed limit hit; no 429 occurred.
+- Secret scan of the evidence directory (patterns gsk_, Bearer, authorization,
+  GROQ_API_KEY, api_key, set-cookie): 0 matching files.
+- Clock resolution: these timings were taken with `time.monotonic()`, which ticks about
+  every 15.6 ms on Windows (values are multiples of ~15.6 ms). Later code uses
+  `time.perf_counter()`; the smoke values are kept unchanged.
+- Manual grading is pending: the assistant has not graded the answer or checked the
+  citation against the PDF. `answer_grade` stays blank until Ajay grades it.
+
+---
+
 ## Known issues
 
-1. **Encoding artifacts in Git history:** Commit defd7eb introduced UTF-8 BOM and
-   Windows-1252 misinterpretation of em-dashes and other Unicode into docs/progress.md.
-   This file is now rewritten with plain ASCII punctuation to avoid recurrence.
+1. **Encoding artifacts in Git history:** Commit defd7eb introduced a UTF-8 BOM and
+   mojibake in docs/progress.md. The file has been rewritten in ASCII without a BOM.
+   PowerShell 5.1 `Set-Content -Encoding utf8` writes a BOM, so do not use it for repo files.
 
-2. **Local main behind origin/main:** local main is at 5275223; origin/main is at
-   c1730fa (includes feat/bootstrap merge). Run `git switch main && git merge origin/main`
-   after current branch work is complete.
+2. **Resolved:** local main now tracks origin/main (see Milestone 2).
 
-3. **Table/equation extraction degrades retrieval for numeric questions:** Chunk text for
-   table rows like "24.6 39.92 2.3e19 1.4e20" is garbled; numeric queries will likely
-   fail or return wrong passages. This is a known limitation of pypdf text extraction;
-   it must be disclosed in Section 8 of the report and in the retrieval trap section.
+3. **Table/equation extraction:** table rows and exponents are garbled in chunk text.
+   Numeric or table questions are expected to retrieve poorly. Not measured yet; must be
+   disclosed in the report.
 
-4. **No offline index on disk yet:** data/indexes/ does not exist until
-   `python scripts/build_index.py` is run. The pipeline (Milestone 2) cannot query
-   retrieval until the index is built.
+4. **Resolved:** indexes are built (data/indexes/, git-ignored) and verified at load.
 
 ---
 
 ## Quota used
-Zero -- no Groq calls made in any session to date.
+- Real smoke run `real-smoke-20261112-01` (run by Ajay on 2026-11-12): 6 provider calls
+  reserved and sent (ledger `used=6`, `ceiling=8`), all HTTP 200. Provider-reported usage:
+  4,990 prompt + 321 completion = 5,311 tokens. Headers after the 6th call showed
+  `x-ratelimit-remaining-requests: 994` of `1000`. Account-wide usage outside this
+  project's ledger is not visible here and may be higher.
+- No other real calls in any session.
 
 ---
 
 ## Next task
-Milestone 2 -- feat/pipeline: provider adapter, 4+ pipeline stages (interpret,
-retrieve, draft, verify), cited answer and refusal, streaming events.
-Requires Ajay to agree a measured-run quota budget before any real Groq calls.
+Done: real smoke test (6 calls). Next: merge feat/pipeline into main, then Milestone 3/4
+on an integration branch (capacity controls, retry budget, stand-in, experiment and
+evaluation runners, tables). No further real calls are authorized at this checkpoint.
