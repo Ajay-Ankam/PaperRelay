@@ -1,0 +1,24 @@
+# LOAD WORKLOAD ONLY. Assistant-written (Claude, experiment-engineer subagent) questions used
+# to generate traffic for stand-in load scenarios. These are NOT evaluation questions, were
+# not written or reviewed by Ajay, have no reference answers, and must never be graded or
+# reported as retrieval-quality evidence. One question per line; '#' lines are comments.
+How many parallel attention heads does the base Transformer use?
+What is the dimensionality of the model (d_model) in the base Transformer?
+Why does scaled dot-product attention divide by the square root of the key dimension?
+What learning rate schedule does the Transformer paper use during training?
+What BLEU score does the big Transformer report on WMT 2014 English-to-German?
+What positional encoding does the Transformer use?
+How much label smoothing was applied when training the Transformer?
+What is Mimi in the Moshi paper?
+At what frame rate does the Mimi codec produce tokens?
+How does Moshi handle the user's and the system's audio streams?
+What is the Inner Monologue method in Moshi?
+What latency does Moshi report for spoken dialogue?
+What does the dynamic chunking mechanism in H-Net do?
+How does the H-Net routing module decide chunk boundaries?
+What does H-Net compare against in its language modeling experiments?
+Does H-Net operate directly on bytes?
+How do the Transformer and Moshi papers differ in how they treat sequence length?
+Which of the three papers discusses tokenization-free modeling?
+What GPU did the authors use to train Moshi for a week?
+What is the capital city of Australia?

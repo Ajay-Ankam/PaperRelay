@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -29,6 +29,8 @@ from paperrelay.providers.base import (
     ProviderMalformed,
     ProviderRateLimited,
     ProviderTimeout,
+    classify_429,
+    http_status_retryable,
     make_call,
     redact_headers,
 )
@@ -51,13 +53,15 @@ def _usage(raw: Any) -> Usage:
     )
 
 
-def _error_detail(raw: bytes) -> str:
+def _error_detail(raw: bytes) -> tuple[str, str]:
+    """(short detail for the call record, full error message for classification)."""
     try:
         err = json.loads(raw).get("error", {})
-        detail = f"{err.get('type', '')}: {err.get('message', '')}"
+        message = str(err.get("message", ""))
+        detail = f"{err.get('type', '')}: {message}"
     except (ValueError, AttributeError):
-        detail = "non-JSON error body"
-    return detail[:200]
+        message, detail = "", "non-JSON error body"
+    return detail[:200], message
 
 
 async def _read_sse(resp: httpx.Response) -> tuple[str, float | None, Usage, str | None]:
@@ -121,6 +125,8 @@ def _read_completion(raw: bytes) -> tuple[str, Usage, str | None]:
 
 
 class GroqProvider:
+    """Also used, unchanged, against the local stand-in (source="stand-in")."""
+
     name = "groq"
     source: Source = "real"
 
@@ -132,7 +138,11 @@ class GroqProvider:
         base_url: str = "https://api.groq.com/openai/v1",
         json_mode: str = "stream_prompt",
         reasoning_effort: str = "low",
+        source: Source = "real",
+        name: str = "groq",
     ):
+        self.source = source
+        self.name = name
         self._client = client
         self._api_key = api_key
         self.model = model
@@ -163,11 +173,20 @@ class GroqProvider:
         self, cls: type[ProviderError], request: ChatRequest, ctx: CallContext, status: CallStatus,
         t_send: float, streamed: bool, http_status: int | None, headers: dict[str, str],
         error: str, first: float | None = None, sent: bool = True, finish: str | None = None,
+        limit_scope: Literal["minute", "day"] | None = None,
     ) -> ProviderError:
+        if cls is ProviderRateLimited:
+            retryable = limit_scope != "day"
+        elif cls is ProviderMalformed:
+            retryable = False  # a resend may cost tokens and would not fix a bad answer
+        elif cls is ProviderHTTPError and http_status is not None and http_status != 200:
+            retryable = http_status_retryable(http_status)
+        else:
+            retryable = True  # transport failure, in-stream upstream error, call timeout
         call = make_call(
             self, request, ctx, status=status, t_send=t_send, streamed=streamed, sent=sent,
             first_content=first, http_status=http_status, error=error, headers=headers,
-            finish_reason=finish,
+            finish_reason=finish, retryable=retryable, limit_scope=limit_scope,
         )
         ctx.record(call)
         return cls(call, error)
@@ -185,12 +204,13 @@ class GroqProvider:
                     http_status = resp.status_code
                     headers = redact_headers(resp.headers)
                     if resp.status_code != 200:
-                        detail = _error_detail(await resp.aread())
+                        detail, message = _error_detail(await resp.aread())
                         limited = resp.status_code == 429
                         raise self._fail(
                             ProviderRateLimited if limited else ProviderHTTPError, request, ctx,
                             "rate_limited" if limited else "error", t_send, streamed,
                             http_status, headers, f"http_{resp.status_code}: {detail}",
+                            limit_scope=classify_429(message, headers) if limited else None,
                         )
                     if streamed:
                         content, first, usage, finish = await _read_sse(resp)

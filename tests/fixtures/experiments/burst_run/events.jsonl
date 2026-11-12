@@ -1,0 +1,9 @@
+{"request_id": "r5", "kind": "received", "ts_ms": 0.0, "payload": {}}
+{"request_id": "r5", "kind": "queued", "ts_ms": 0.0, "payload": {"queue_depth": 4}}
+{"request_id": "r5", "kind": "rate_wait", "ts_ms": 250.0, "payload": {"wait_ms": 100.0}}
+{"request_id": "r5", "kind": "admitted", "ts_ms": 300.0, "payload": {"queue_wait_ms": 300.0}}
+{"request_id": "r5", "kind": "retry_wait", "ts_ms": 320.0, "payload": {"delay_ms": 100.0}}
+{"request_id": "r5", "kind": "answer_token", "ts_ms": 600.0, "payload": {}}
+{"request_id": "r5", "kind": "retry_wait", "ts_ms": 700.0, "payload": {"delay_ms": 50.0}}
+{"request_id": "r5", "kind": "cancelled", "ts_ms": 900.0, "payload": {"status": "cancelled"}}
+{"request_id": "r1", "kind": "done", "ts_ms": 190.0, "payload": {"status": "answered"}}

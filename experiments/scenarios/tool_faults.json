@@ -1,0 +1,42 @@
+{
+  "name": "tool_faults",
+  "description": "Deterministic retrieval tool fault injection (15% timeout, 10% error, seeded per request_id) with a 1 s tool timeout; provider side healthy.",
+  "source": "stand-in",
+  "retrieval_setting": "medium",
+  "questions_file": "experiments/workload_questions.txt",
+  "client_timeout_s": 50,
+  "lag_threshold_ms": 250,
+  "max_requests": 80,
+  "max_runtime_s": 180,
+  "server_record_wait_s": 15,
+  "capacity_poll_s": 1.0,
+  "standin_config_base": "standin/config-default.json",
+  "calibration_file": "standin/calibration-v1-preliminary.json",
+  "limits_note": "Gate and stand-in minute limits are workload-scaled synthetic values (stand-in 120 RPM / 60000 TPM, gate at 80%), not real Groq limits, so a 3-minute run yields enough requests. Real header-advertised values are in experiments/limits_evidence.json.",
+  "seed": 707,
+  "requests": 30,
+  "window_s": 100,
+  "arrival": "poisson",
+  "api_env": {
+    "PAPERRELAY_MAX_CONCURRENCY": "4",
+    "PAPERRELAY_MAX_QUEUE": "16",
+    "PAPERRELAY_RPM": "96",
+    "PAPERRELAY_TPM": "48000",
+    "PAPERRELAY_RPD": "5000",
+    "PAPERRELAY_TPD": "2000000",
+    "PAPERRELAY_RETRY_MAX": "2",
+    "PAPERRELAY_RETRY_SEED": "0",
+    "PAPERRELAY_DEADLINE_S": "45",
+    "PAPERRELAY_FAULT_RETRIEVAL": "timeout=0.15,error=0.1,seed=7",
+    "PAPERRELAY_TOOL_TIMEOUT_S": "1.0"
+  },
+  "standin_config": {
+    "limits": {
+      "rpm": 120,
+      "tpm": 60000,
+      "rpd": 6000,
+      "tpd": 2500000
+    },
+    "seed": 707
+  }
+}

@@ -1,0 +1,3 @@
+question_id,question,category,expected_answerable,reference_paper,reference_page,reference_passage,author
+EXAMPLE-1,PLACEHOLDER - replace with your own answerable question,answerable,yes,PLACEHOLDER arXiv version e.g. 1706.03762v7,PLACEHOLDER page number,PLACEHOLDER exact supporting passage copied from the PDF,
+EXAMPLE-2,PLACEHOLDER - replace with your own question the papers cannot answer,unanswerable,no,,,PLACEHOLDER why no passage supports an answer,

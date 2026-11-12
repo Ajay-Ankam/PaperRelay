@@ -1,0 +1,190 @@
+{
+  "kind": "paperrelay-standin-calibration",
+  "version": "v1-preliminary",
+  "preliminary": true,
+  "status_note": "Preliminary: derived from very few real calls; timing parameters are point estimates with no meaningful confidence interval.",
+  "source": "real",
+  "source_run_ids": [
+    "real-smoke-20261112-01"
+  ],
+  "pipeline_commits": [
+    "382d9c2c3f0e2c98fcc671de601e13eadfdecabd"
+  ],
+  "models": [
+    "openai/gpt-oss-20b"
+  ],
+  "inputs": [
+    {
+      "path": "evidence/real/real-smoke-20261112-01/calls.jsonl",
+      "sha256": "0c86c7c40982efbe5bc38f303fd255d9e8d07b23a162d065240c73f652b9d948"
+    },
+    {
+      "path": "evidence/real/real-smoke-20261112-01/run_meta.json",
+      "sha256": "0c7e493c8e09fd1cfd764f243f22fad28c8e90111fc8c72e65420da13e5d72ac"
+    }
+  ],
+  "sample_unit": "provider call (calls.jsonl), not pipeline request",
+  "sample_counts": {
+    "draft": 2,
+    "draft_expanded": 1,
+    "interpret": 2,
+    "verify": 1
+  },
+  "calls_excluded_not_ok_or_not_streamed": 0,
+  "clock_resolution_note": "The real run measured with time.monotonic() on Windows, which ticks at about 15.6 ms; values such as 0.0, 15.0/16.0 and 47.0 ms are quantised to that grid, so stream durations below ~16 ms are not resolvable. The API now uses time.perf_counter().",
+  "measured_samples": {
+    "draft": {
+      "provider_first_content_ms": [
+        2078.0,
+        468.0
+      ],
+      "total_ms": [
+        2156.0,
+        515.0
+      ],
+      "stream_ms": [
+        78.0,
+        47.0
+      ],
+      "completion_tokens": [
+        67,
+        47
+      ],
+      "prompt_tokens": [
+        1038,
+        1076
+      ],
+      "request_ids": [
+        "dc9f52899db645638fef0cfaa82528f1",
+        "9d76ea27ce4241aeaa1eea8ed495879c"
+      ]
+    },
+    "draft_expanded": {
+      "provider_first_content_ms": [
+        1000.0
+      ],
+      "total_ms": [
+        1015.0
+      ],
+      "stream_ms": [
+        15.0
+      ],
+      "completion_tokens": [
+        48
+      ],
+      "prompt_tokens": [
+        1950
+      ],
+      "request_ids": [
+        "9d76ea27ce4241aeaa1eea8ed495879c"
+      ]
+    },
+    "interpret": {
+      "provider_first_content_ms": [
+        2671.0,
+        531.0
+      ],
+      "total_ms": [
+        2687.0,
+        547.0
+      ],
+      "stream_ms": [
+        16.0,
+        16.0
+      ],
+      "completion_tokens": [
+        49,
+        49
+      ],
+      "prompt_tokens": [
+        262,
+        265
+      ],
+      "request_ids": [
+        "dc9f52899db645638fef0cfaa82528f1",
+        "9d76ea27ce4241aeaa1eea8ed495879c"
+      ]
+    },
+    "verify": {
+      "provider_first_content_ms": [
+        500.0
+      ],
+      "total_ms": [
+        500.0
+      ],
+      "stream_ms": [
+        0.0
+      ],
+      "completion_tokens": [
+        61
+      ],
+      "prompt_tokens": [
+        399
+      ],
+      "request_ids": [
+        "dc9f52899db645638fef0cfaa82528f1"
+      ]
+    }
+  },
+  "header_advertised_limits": {
+    "x-ratelimit-limit-requests": [
+      "1000"
+    ],
+    "x-ratelimit-limit-tokens": [
+      "8000"
+    ]
+  },
+  "standin_parameters": {
+    "interpret": {
+      "pooled_from": [
+        "interpret"
+      ],
+      "n": 2,
+      "first_content_median_ms": 1190.9,
+      "first_content_sigma": 0.6,
+      "stream_median_ms": 16.0,
+      "stream_sigma": 0.5,
+      "completion_tokens": 49
+    },
+    "draft": {
+      "pooled_from": [
+        "draft",
+        "draft_expanded"
+      ],
+      "n": 3,
+      "first_content_median_ms": 990.7,
+      "first_content_sigma": 0.6,
+      "stream_median_ms": 47.0,
+      "stream_sigma": 0.5,
+      "completion_tokens": 48
+    },
+    "verify": {
+      "pooled_from": [
+        "verify"
+      ],
+      "n": 1,
+      "first_content_median_ms": 500.0,
+      "first_content_sigma": 0.6,
+      "stream_median_ms": 0.0,
+      "stream_sigma": 0.5,
+      "completion_tokens": 61
+    }
+  },
+  "estimators": {
+    "first_content_median_ms": "geometric mean of pooled samples (lognormal median estimate)",
+    "stream_median_ms": "median of (total_ms - provider_first_content_ms)",
+    "completion_tokens": "median provider-reported completion tokens (includes hidden reasoning tokens; content is synthetic)"
+  },
+  "assumptions": [
+    "Distribution shape: lognormal per stage; sigma values (0.6 first-content, 0.5 stream) are synthetic, not estimated (n <= 3 per stage cannot support a spread estimate).",
+    "Pooling: draft and draft_expanded are pooled because the stand-in sees only the prompt; their real latency may differ with prompt length.",
+    "The first draft sample (2078.0 ms) is more than 3x the others ([468.0]); the cause (connection setup, cold start, provider variance) was not measured and all samples are kept.",
+    "The first interpret sample (2671.0 ms) is more than 3x the others ([531.0]); the cause (connection setup, cold start, provider variance) was not measured and all samples are kept.",
+    "Long tail (probability, multiplier) is synthetic: no tail was observed in 6 calls.",
+    "Load slowdown with concurrency is synthetic: the real run was sequential (no concurrent calls measured).",
+    "Error, 429 and malformed-stream rates are synthetic: none were observed.",
+    "Prompt-token usage reported by the stand-in is chars/4 (synthetic); completion tokens use the calibrated per-stage median.",
+    "Minute/day limit enforcement semantics (sliding 60 s minute window, calendar simulated-UTC day) are synthetic; only the limit values in header_advertised_limits were observed.",
+    "Real Groq replenishes request/token budgets on a rolling basis (reset headers); the stand-in day window resets at simulated UTC midnight."
+  ]
+}

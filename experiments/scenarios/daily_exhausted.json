@@ -1,0 +1,40 @@
+{
+  "name": "daily_exhausted",
+  "description": "Small simulated daily token budget on the gate (TPD 40000, RPD 200) so the day budget runs out mid-run while requests are both queued and in flight. Simulated exhaustion only; the real account's daily budget is never targeted.",
+  "source": "stand-in",
+  "retrieval_setting": "medium",
+  "questions_file": "experiments/workload_questions.txt",
+  "client_timeout_s": 50,
+  "lag_threshold_ms": 250,
+  "max_requests": 80,
+  "max_runtime_s": 180,
+  "server_record_wait_s": 15,
+  "capacity_poll_s": 1.0,
+  "standin_config_base": "standin/config-default.json",
+  "calibration_file": "standin/calibration-v1-preliminary.json",
+  "limits_note": "Gate and stand-in minute limits are workload-scaled synthetic values (stand-in 120 RPM / 60000 TPM, gate at 80%), not real Groq limits, so a 3-minute run yields enough requests. Real header-advertised values are in experiments/limits_evidence.json.",
+  "seed": 505,
+  "requests": 30,
+  "window_s": 60,
+  "arrival": "poisson",
+  "api_env": {
+    "PAPERRELAY_MAX_CONCURRENCY": "4",
+    "PAPERRELAY_MAX_QUEUE": "16",
+    "PAPERRELAY_RPM": "96",
+    "PAPERRELAY_TPM": "48000",
+    "PAPERRELAY_RPD": "200",
+    "PAPERRELAY_TPD": "40000",
+    "PAPERRELAY_RETRY_MAX": "2",
+    "PAPERRELAY_RETRY_SEED": "0",
+    "PAPERRELAY_DEADLINE_S": "45"
+  },
+  "standin_config": {
+    "limits": {
+      "rpm": 120,
+      "tpm": 60000,
+      "rpd": 6000,
+      "tpd": 2500000
+    },
+    "seed": 505
+  }
+}

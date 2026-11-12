@@ -282,6 +282,68 @@ Human-reported results, verified by the assistant against `evidence/real/real-sm
 
 ---
 
+## Milestone 3/4 -- feat/experiments (handoff checkpoint 2026-11-12; partial)
+
+### Git (verified 2026-11-12, read-only)
+- Merged and pushed: feat/pipeline -> main as ac78072 (110 tests passed on the merge).
+- Ajay merged PR #3 (feat/experiments at 865db23, interface contract) into origin/main as
+  f1d8463. Local main (ac78072) is 2 commits behind origin/main and was not updated.
+- feat/experiments HEAD 1187b39 is 4 commits ahead of origin/feat/experiments (not pushed):
+  348dfd4 (experiment runners), c39238d (capacity/retries/stand-in),
+  d403ab1 and 1187b39 (merges). Both specialist worktrees (.claude/worktrees/agent-*)
+  are clean, and their work is contained in 1187b39.
+- Uncommitted (must be preserved): 8 experiments/scenarios/*.json files (calibration
+  file and base config set; the retry pair's fault key renamed to error_rate),
+  standin/config-default.json (plan wording corrected to "Developer plan"), a one-line
+  import fix in experiments/load.py, docs/real-work-plan.md (budget proposal), and the
+  untracked aborted run evidence/stand-in/standin-steady-20261112-01/.
+
+### Implemented (code exists and tests pass; NOT validated by real experiments)
+- Capacity (src/paperrelay/capacity/): admission queue, concurrency, minute and
+  persisted UTC-day gates, reservation and reconciliation, shared retry budget with
+  retry-after, jitter and deadline skip, retrieval fault injection. Integrated in
+  pipeline/runner.py and api/main.py (/capacity, /admin/limits, provider mode standin).
+- Stand-in (src/paperrelay/standin/, standin/*.json): separate HTTP service with SSE,
+  minute/day 429, faults, tail latency and load slowdown. Calibration
+  calibration-v1-preliminary.json uses the 6 real smoke calls; spread, tail, slowdown and
+  error rates are assumptions. Content is synthetic-extractive, not model quality.
+- Experiments (src/paperrelay/experiments/): open-loop load runner, orchestrator,
+  8 scenario files, analysis (Tables 1/2a/2b/3, slow-request breakdown), resumable
+  evaluation runner with grading sheet, limit probe (never run), submission assembly
+  script (scripts/assemble_submission.py).
+- Scenario limits are workload-scaled synthetic values (stand-in 120 RPM / 60K TPM),
+  not real Groq limits. This is a proposal by the assistant, not Ajay's decision.
+
+### Checks
+- Previously, in this session: the merge d403ab1 ran 174 passed (full suite including PDF
+  tests). After 1187b39 plus the load.py import fix: ruff clean, mypy clean (46 files),
+  experiment tests 54 passed.
+- During the handoff, on HEAD 1187b39 plus the uncommitted changes: 221 passed (all tests
+  except tests/test_retriever_load.py), ruff clean, mypy clean (46 files). The three
+  scenario stand-in configs checked (retry_on, limit_halved, daily_exhausted) validate
+  against StandinConfig.
+- Checkpoint (2026-11-12): added 4 runner-level regression tests for the
+  `min_attempt_s` admission and minute-gate guards (tests/test_capacity.py). Each was
+  confirmed to fail with its guard disabled. test_capacity 24 passed three times; the other
+  non-PDF suites 170 passed; ruff and mypy clean (46 files). All 8 scenario files resolve
+  their paths and validate against StandinConfig. The PDF suite was not rerun, because
+  no retrieval code changed.
+- The experiment agent later stalled (no progress for 600 s). Its committed work
+  (348dfd4) was already integrated; its worktree had no uncommitted changes.
+- Specialists reported: reliability 136 passed, but before its final two
+  `min_attempt_s` guard edits, which have no tests; experiments 156 passed / 8 skipped.
+
+### Not done
+- No completed stand-in scenario run. evidence/stand-in/standin-steady-20261112-01 was
+  interrupted after about 54 s: 4/16 requests answered, no results.csv, dirty commit.
+  It is aborted and unusable for tables.
+- No reports/ tables generated. Docs missing: capacity.md, standin.md, experiments.md,
+  evaluation.md.
+- No independent review of the Milestone 3 code yet.
+- The 04 response file was never produced (that session was interrupted); not recreated.
+
+---
+
 ## Known issues
 
 1. **Encoding artifacts in Git history:** Commit defd7eb introduced a UTF-8 BOM and
@@ -309,6 +371,5 @@ Human-reported results, verified by the assistant against `evidence/real/real-sm
 ---
 
 ## Next task
-Done: real smoke test (6 calls). Next: merge feat/pipeline into main, then Milestone 3/4
-on an integration branch (capacity controls, retry budget, stand-in, experiment and
-evaluation runners, tables). No further real calls are authorized at this checkpoint.
+See docs/next-session.md (handoff 2026-11-12). First task: commit the preserved
+uncommitted changes on feat/experiments, then run the five stand-in scenarios.

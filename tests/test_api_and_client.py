@@ -15,13 +15,14 @@ import uvicorn
 from paperrelay.api.main import Components, create_app
 from paperrelay.client import smoke
 from paperrelay.config import Settings
-from paperrelay.contracts import Usage
+from paperrelay.contracts import PipelineRequest, Usage
 from paperrelay.measure.evidence import EvidenceLogger
 from paperrelay.pipeline.runner import PipelineDeps, PipelineRunner
 from tests.fakes import (
     DRAFT_INSUFFICIENT,
     DRAFT_OK,
     INTERP,
+    QUESTION,
     ScriptedProvider,
     Step,
     happy_script,
@@ -183,3 +184,27 @@ async def test_real_socket_disconnect_cancels_server_pipeline(tmp_path):
     assert [c["status"] for c in calls] == ["ok", "cancelled"]
     # tokens of the completed interpret call still count; the cancelled call's are unknown
     assert row["tokens_in"] == 50 and row["tokens_usage_complete"] is False
+
+
+async def test_offline_mode_keeps_answering_back_to_back_questions(tmp_path):
+    # Regression: the offline double reports no usage, so a quota gate kept every worst-case
+    # reservation and refused the second question with minute_budget_wait_exceeds_deadline.
+    from paperrelay.api.main import build_capacity
+    from paperrelay.providers.offline import OfflineExtractiveProvider
+
+    settings = Settings(provider="offline", evidence_dir=tmp_path, run_id="t")
+    deps = PipelineDeps(provider=OfflineExtractiveProvider(), retriever=synthetic_retriever(),
+                        capacity=build_capacity(settings))
+    runner = PipelineRunner(deps)
+    results = [(await runner.run(PipelineRequest(question=QUESTION)))[1] for _ in range(3)]
+    assert [r.status for r in results] == ["answered"] * 3
+    assert not list(tmp_path.rglob("daily_budget.json"))  # nothing persisted for the double
+
+
+def test_quota_gate_stays_enforced_for_standin_and_real(tmp_path):
+    from paperrelay.api.main import build_capacity
+
+    for provider in ("standin", "groq"):
+        settings = Settings(provider=provider, evidence_dir=tmp_path, run_id="t",
+                            rpm=7, tpm=700)
+        assert build_capacity(settings).quota.snapshot()["limits"]["tpm"] == 700
