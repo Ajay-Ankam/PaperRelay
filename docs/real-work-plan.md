@@ -1,5 +1,10 @@
 # Remaining real work: budget proposal (NOT authorized, NOT run)
 
+> **Superseded for the evaluation run by [evaluation.md](evaluation.md) §3 (2026-11-12).**
+> Changes: retries off, a call ceiling of 180, a 160K token budget, a 9,000-token worst
+> case and 55 s spacing. The spacing was derived after a stand-in dry run showed that
+> 20 s spacing saturates the local 6K TPM gate. The probe section below still stands.
+
 Prepared 2026-11-12 by the assistant. Every real call below needs Ajay's explicit approval
 of the stated ceiling first. Zero real calls were made while preparing this.
 

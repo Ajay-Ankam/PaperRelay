@@ -342,6 +342,30 @@ Human-reported results, verified by the assistant against `evidence/real/real-sm
 - No independent review of the Milestone 3 code yet.
 - The 04 response file was never produced (that session was interrupted); not recreated.
 
+### Stand-in steady run -- standin-steady-20261112-02 (2026-11-12, zero real calls)
+- Command (PowerShell, repo root):
+  `.\.venv\Scripts\python.exe -m paperrelay.experiments.run --scenario experiments\scenarios\steady.json --run-id standin-steady-20261112-02 --api-port 8310 --standin-port 8311`
+- Commit 9284c1d (clean tree apart from untracked evidence/stand-in/). Ports were free
+  beforehand. The runner exited 0 after 109 s; orchestrator status `completed`; both
+  servers stopped gracefully and nothing was left listening on 8310/8311.
+- Results: results.csv has 16 rows for 16 scheduled requests (unique ids). All 16 have
+  status ok: 15 answered, 1 `insufficient_evidence` refusal, 0 retries, and 0 queue wait
+  (concurrency 4 never saturated). The refusal has a blank user first_token_ms, per the
+  metrics.md policy.
+- Provenance checks: 48 stand-in calls (3 per request), all HTTP 200, provider `standin`.
+  Per-row tokens equal the summed call usage (0 mismatches). Total tokens 27,053 and
+  48 requests match daily_budget.json. Usage is complete on all rows. Per-row
+  provider_first_token_ms matches calls.jsonl. User first_token_ms is 0.9 to 4.6 s later
+  than provider TTFT, because the draft is buffered until verification passes.
+- Latency (n=16, stand-in calibration v1-preliminary; not model quality):
+  - user first_token_ms (15 answers): median 4.5 s, max 7.5 s;
+  - total_ms: median 4.5 s, max 7.5 s;
+  - arrival lag: 15.5 ms or less.
+- Exit code 3 on both child processes is benign. The API log shows "Application shutdown
+  complete". uvicorn 0.30.6 then re-raises the captured SIGBREAK, and the Windows C
+  runtime's default handler for it exits with code 3.
+- The aborted run standin-steady-20261112-01 is preserved unchanged.
+
 ---
 
 ## Known issues
