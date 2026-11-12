@@ -23,12 +23,25 @@ the orchestrator refuses to overwrite a run directory.
 ## Output: evidence/stand-in/<run_id>/
 | File | Content |
 |---|---|
-| `results.csv` | one row per scheduled request (brief columns + added columns, docs/metrics.md) |
+| `results.csv` | one row per scheduled request (brief columns + added columns, docs/metrics.md). Rows are appended as each request finishes; at completion the file is checked (one row per scheduled id) and atomically rewritten in schedule order with the server-record join |
+| `results_status.json` | `run_status`: `in_progress` (if it still says this, the runner was killed), `completed`, `interrupted` or `failed`; `results_csv` complete or partial; `revision_start`/`revision_end`/`revision_changed_during_run`. Only `completed` runs are accepted by `analyze` |
 | `client_observations.jsonl` | client-side timing per request (first progress, first answer token, terminal) |
 | `requests.jsonl`, `events.jsonl`, `calls.jsonl` | server records: request summary, NDJSON events, one record per provider attempt |
 | `run_events.jsonl` | runner progress (schedule, sends, run_end) |
 | `scenario_meta.json`, `run_meta.json`, `orchestrator.json` | scenario + hash, seed, schedule, calibration hash, commit, effective env, process records |
 | `standin_config.json`, `standin_state_end.json`, `daily_budget.json`, `*_server_log.txt` | stand-in config/state, daily accounting, server logs |
+
+Notes on the result files:
+- A partial `results.csv` holds client-side values only: there is no server join and
+  no rows for unfinished requests.
+- Appends are flushed to the OS but not fsynced. They survive a killed process, not an
+  OS crash.
+- `client_observations.jsonl` is in completion order.
+- If `total - waiting - retry_wait` is negative (an abandoned request whose server
+  waits outlived the client), `working_ms` is left blank. A `partition_inconsistent`
+  run event records the raw values instead of clamping them.
+- The code revision is recorded at both start and end. Untracked files under `src/`
+  also mark it `-dirty`.
 
 Checks after every run:
 - the row count equals the scheduled count, and request ids are unique;

@@ -36,6 +36,9 @@ To run it by hand:
 - `--seed` overrides the config seed.
 - Scenario configs deep-merge over `config-default.json`. The merged file is saved as
   `standin_config.json` in each run directory.
-- Known label issue: when a scenario overrides `limits`, the inherited `notes` text
-  still describes the default 8K TPM / 1K RPD. The `limits` object is authoritative.
-  A fix is in progress (see progress.md).
+- Since commit 1daa134, when a scenario sets `calibration_file`, the orchestrator injects
+  that file into the stand-in config, and a conflicting calibration fails fast. When a
+  scenario overrides `limits`, the inherited "Limits..." note is replaced by one stating
+  the effective limits.
+- Runs before that commit, including standin-steady-20261112-02, still carry the stale
+  default-limits note. Their `limits` object is authoritative.
