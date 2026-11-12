@@ -51,7 +51,6 @@ from paperrelay.experiments.scenario import (
     resolve,
 )
 
-
 SCHEDULE_LEAD_S = 0.5
 
 

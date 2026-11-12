@@ -30,7 +30,7 @@
   "notes": [
     "Stage first-content/stream medians and completion tokens come from the calibration file (preliminary, 6 real calls).",
     "SYNTHETIC design choices, not measured: lognormal sigma, tail_probability 0.05 x4, slowdown +25% per in-flight call beyond 1, error/malformed rates 0 by default, chunk count.",
-    "Limits: tpm 8000 and rpd 1000 match the header-advertised values on the real smoke run; rpm 30 and tpd 200000 follow documented gpt-oss-20b free-tier values (re-verify docs). Enforcement semantics are synthetic.",
+    "Limits: tpm 8000 and rpd 1000 match the header-advertised values on the real smoke run; rpm 30 and tpd 200000 follow the documented gpt-oss-20b values, which the Groq docs label base limits for the Developer plan (checked 2026-11-12; free-plan values unconfirmed). Enforcement semantics are synthetic.",
     "Content is synthetic-extractive JSON for pipeline mechanics only; it is not model-quality evidence."
   ]
 }
