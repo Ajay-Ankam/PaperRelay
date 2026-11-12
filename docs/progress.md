@@ -255,6 +255,33 @@ runs with unraisable-exception warnings treated as errors.
 
 ---
 
+## Real smoke test -- real-smoke-20261112-01 (run by Ajay, 2026-11-12)
+
+Human-reported results, verified by the assistant against `evidence/real/real-smoke-20261112-01/`
+(results.csv, requests.jsonl, calls.jsonl):
+
+| Question | Outcome | first_token_ms | total_ms | tokens in/out | calls |
+|---|---|---|---|---|---|
+| How many parallel attention heads does the base Transformer use? | answered: "The base Transformer uses eight parallel attention heads. [1]" | 5484.0 | 5484.0 | 1699 / 177 | interpret, draft, verify |
+| What learning rate did the original BERT paper use for pre-training? | refused: insufficient_evidence (after one expansion) | not applicable | 2218.0 | 3291 / 144 | interpret, draft, draft_expanded |
+
+- Per-call provider first content (ms, from send): interpret 2671.0 and 531.0; draft 2078.0
+  and 468.0; draft_expanded 1000.0; verify 500.0. Every call's first content arrived within
+  about 16-47 ms of its end: with prompt-requested JSON and hidden reasoning, content
+  appears only after reasoning finishes.
+- Header-advertised values (from the redacted allow-listed headers): limit-requests 1000
+  (RPD per Groq docs), limit-tokens 8000 (TPM per Groq docs). This is header evidence,
+  not an observed limit hit; no 429 occurred.
+- Secret scan of the evidence directory (patterns gsk_, Bearer, authorization,
+  GROQ_API_KEY, api_key, set-cookie): 0 matching files.
+- Clock resolution: these timings were taken with `time.monotonic()`, which ticks about
+  every 15.6 ms on Windows (values are multiples of ~15.6 ms). Later code uses
+  `time.perf_counter()`; the smoke values are kept unchanged.
+- Manual grading is pending: the assistant has not graded the answer or checked the
+  citation against the PDF. `answer_grade` stays blank until Ajay grades it.
+
+---
+
 ## Known issues
 
 1. **Encoding artifacts in Git history:** Commit defd7eb introduced a UTF-8 BOM and
@@ -272,11 +299,16 @@ runs with unraisable-exception warnings treated as errors.
 ---
 
 ## Quota used
-Zero. No Groq calls have been made in any session to date.
+- Real smoke run `real-smoke-20261112-01` (run by Ajay on 2026-11-12): 6 provider calls
+  reserved and sent (ledger `used=6`, `ceiling=8`), all HTTP 200. Provider-reported usage:
+  4,990 prompt + 321 completion = 5,311 tokens. Headers after the 6th call showed
+  `x-ratelimit-remaining-requests: 994` of `1000`. Account-wide usage outside this
+  project's ledger is not visible here and may be higher.
+- No other real calls in any session.
 
 ---
 
 ## Next task
-Human testing checkpoint: Ajay follows docs/manual-testing.md (offline steps 1-4). If Ajay
-approves the budget, step 5 is a real smoke test with a hard ceiling of 8 provider calls.
-After that, Milestone 3 (capacity controls, retry budget, calibrated stand-in).
+Done: real smoke test (6 calls). Next: merge feat/pipeline into main, then Milestone 3/4
+on an integration branch (capacity controls, retry budget, stand-in, experiment and
+evaluation runners, tables). No further real calls are authorized at this checkpoint.

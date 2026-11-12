@@ -1,0 +1,76 @@
+{
+  "run_id": "real-smoke-20261112-01",
+  "pipeline_commit": "382d9c2c3f0e2c98fcc671de601e13eadfdecabd",
+  "config_hash": "65bc188cfb8824d5",
+  "prompt_version": "m2-v1",
+  "started_utc": "2026-11-12T11:01:26.844959+00:00",
+  "source": "real",
+  "model": "openai/gpt-oss-20b",
+  "settings": {
+    "provider": "groq",
+    "groq_model": "openai/gpt-oss-20b",
+    "groq_base_url": "https://api.groq.com/openai/v1",
+    "groq_json_mode": "stream_prompt",
+    "reasoning_effort": "low",
+    "deadline_s": 60.0,
+    "call_timeout_s": 30.0,
+    "retrieval_setting": "medium",
+    "index_dir": "C:\\Users\\ajay ankam\\PaperRelay\\data\\indexes",
+    "manifest_path": "C:\\Users\\ajay ankam\\PaperRelay\\data\\papers\\manifest.json",
+    "evidence_dir": "C:\\Users\\ajay ankam\\PaperRelay\\evidence",
+    "run_id": "real-smoke-20261112-01",
+    "real_call_ceiling": 8
+  },
+  "retrieval_configs": {
+    "small": {
+      "name": "small",
+      "chunk_size": 256,
+      "overlap": 32,
+      "top_k": 5
+    },
+    "medium": {
+      "name": "medium",
+      "chunk_size": 512,
+      "overlap": 64,
+      "top_k": 5
+    },
+    "large": {
+      "name": "large",
+      "chunk_size": 1024,
+      "overlap": 128,
+      "top_k": 3
+    }
+  },
+  "index_meta": {
+    "built_utc": "2026-11-10T17:42:55.128692+00:00",
+    "pypdf_version": "4.3.1",
+    "chunk_unit": "characters",
+    "papers": {
+      "1706.03762v7": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "2410.00037v1": "a687144cc77bea86b0c60ae800ccb1d3e0816033fa5c7960388fe29a0dbfcfac",
+      "2507.07955v2": "04a2b32e6e82853cfc23c5db132750874a86cde99219ec6f664128f4aa83122f"
+    },
+    "settings": {
+      "small": {
+        "chunk_size_chars": 256,
+        "overlap_chars": 32,
+        "top_k": 5,
+        "chunks": 1832
+      },
+      "medium": {
+        "chunk_size_chars": 512,
+        "overlap_chars": 64,
+        "top_k": 5,
+        "chunks": 931
+      },
+      "large": {
+        "chunk_size_chars": 1024,
+        "overlap_chars": 128,
+        "top_k": 3,
+        "chunks": 485
+      }
+    }
+  },
+  "retries": "none (Milestone 2)",
+  "workers": "single process; request admission holds are in-memory; the ledger file lock makes a second real-provider process refuse to start"
+}
