@@ -17,8 +17,9 @@ brief is `assignment_description.md`, which is git-ignored.
 - The checkpoint pushed earlier work: `348dfd4` (experiment runners), `c39238d`
   (capacity, retries, stand-in), and the merges `d403ab1` and `1187b39`. The checkpoint
   commits add the scenario config fixes, the guard tests and these docs.
-- `origin/main` is `f1d8463` (Ajay merged PR #3, interface commit `865db23`). Local
-  `main` is behind it. feat/experiments is NOT merged into main; that needs Ajay's review.
+- Ajay merged PR #4 (feat/experiments through `bf743ea`, which includes the Linux mypy fix
+  and the offline quota-gate fix) into `origin/main` as `7c04d7b`. CI passed on Linux
+  before the merge.
 - Left untracked on purpose: `evidence/stand-in/standin-steady-20261112-01/`, the aborted
   run. See Evidence.
 - Agent worktrees under `.claude/worktrees/` are clean. Their work is integrated.
@@ -131,32 +132,35 @@ It is not committed. Never delete it, never call it successful, and never use it
 
 ## Ordered remaining tasks (critical path in bold)
 1. Done in this checkpoint: preserved changes committed and pushed.
-2. **Run the stand-in scenarios** with new run ids:
+2. Before every push, run `.\.venv\Scripts\python.exe -m mypy --platform linux` as well as plain `mypy`. CI runs on Linux, so Windows-only constants
+   (e.g. `subprocess.CREATE_NEW_PROCESS_GROUP`) must sit inside an
+   `if sys.platform == "win32":` block.
+3. **Run the stand-in scenarios** with new run ids:
    - required: steady, burst, sustained_overload, limit_halved, daily_exhausted;
    - also retry_on, retry_off and tool_faults.
    Check that every scheduled request has one `results.csv` row and that
    `daily_exhausted` actually hits exhaustion.
-3. **Generate the tables** with `analyze`, then inspect reconciliation, the slow-request
+4. **Generate the tables** with `analyze`, then inspect reconciliation, the slow-request
    breakdown and the retry comparison. Report the retry outcome as observed.
-4. Run an independent quality review of the capacity, stand-in and analysis code, and fix
+5. Run an independent quality review of the capacity, stand-in and analysis code, and fix
    material defects. Test the `min_attempt_s` guards.
-5. Write docs/capacity.md, standin.md, experiments.md and evaluation.md (short).
-6. **Ajay:**
+6. Write docs/capacity.md, standin.md, experiments.md and evaluation.md (short).
+7. **Ajay:**
    - Author 15 or more questions in `eval/questions.csv` from `eval/questions_template.csv`.
      Include unanswerable, table/numeric, cross-paper and ambiguous-terminology questions,
      each with reference paper, page and passage.
    - Approve the real budget.
-7. **Real evaluation**: 15 or more questions × 3 settings, reused as the latency
+8. **Real evaluation**: 15 or more questions × 3 settings, reused as the latency
    calibration. Then the optional limit probe, once its budget is approved.
-8. **Ajay:**
+9. **Ajay:**
    - Grade the evaluation answers, plus the smoke answer.
    - Visit vaani.dev and write the feedback.
    - Write the reflection and supply the real prompts.
-9. Recalibrate the stand-in (v2) from the evaluation calls if time permits. Otherwise the
+10. Recalibrate the stand-in (v2) from the evaluation calls if time permits. Otherwise the
    final tables cite v1-preliminary.
-10. **Write the 2-page report** with the required headings and tables, render the PDF,
+11. **Write the 2-page report** with the required headings and tables, render the PDF,
     run `assemble_submission`, reproduce from a clean clone, and tag.
-11. **Ajay:** create the Drive folder, set anyone-with-link access, submit the form, and
+12. **Ajay:** create the Drive folder, set anyone-with-link access, submit the form, and
     verify the confirmation email.
 
 **Omit if time is short:**
