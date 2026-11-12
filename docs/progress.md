@@ -366,6 +366,64 @@ Human-reported results, verified by the assistant against `evidence/real/real-sm
   runtime's default handler for it exits with code 3.
 - The aborted run standin-steady-20261112-01 is preserved unchanged.
 
+### Checkpoint 1A-1C (2026-11-12, zero real calls)
+Commits on feat/experiments, all pushed:
+- 1daa134: incremental results, run revisions, calibration injection, partition flag;
+- fe94e7a: evaluation accepts BOM-prefixed questions and grade CSVs;
+- 264d05b: transcript exporter;
+- 8b8b9a5: operating docs;
+- 3247f25: results-status docs.
+
+**1A: conversation capture.** scripts/export_conversations.py (stdlib only) plus 9 tests.
+- Exported all 4 local sessions to private/conversations/exports/ (ignored).
+- Independent check on session 80efff12: 13/13 typed prompts and 149/149 assistant text
+  blocks appear verbatim; 0 thinking blocks leaked; raw copy sha256 matches; 5/5
+  subagents linked by id.
+- The quality review found that slash commands (`system`/`local_command` records) and
+  queued prompts would be dropped. Both are fixed and tested. The review also covered
+  stdin decoding, the subagent-path check, api_error labels, and text sent with a tool
+  result.
+- Python rescan of the redacted copies: 0 residual emails, username variants or key
+  patterns. Some code lines are over-redacted as emails; the copy needs Ajay's review.
+- A Stop hook in .claude/settings.local.json (ignored) runs the exporter async.
+  **Verified:** the real Stop event at 16:35:10 UTC produced an export, generated
+  16:35:11, containing this session's prompt and that turn's final message.
+- Limits: the newest turn can lag until the next Stop; interrupts and API-error endings
+  are not hooked.
+
+**1B: steady scenario.** The quality review found a material defect: results.csv and
+client_observations.jsonl were written only at the end, which explains why -01 had no
+rows. The experiment-engineer fixed it (rows appended per request; results_status.json),
+and 252 tests pass.
+- standin-steady-20261112-03 (run by the experiment-engineer) completed 16/16 and passed
+  every data check. It is labelled `8b8b9a5-dirty` because the main session edited docs
+  while the run started; the executed code matched 8b8b9a5. Kept as is.
+- **standin-steady-20261112-04**: clean revision 3247f25 at start and end; run_status
+  completed.
+  - 16/16 rows and 16/16 client terminal records, unique ids.
+  - 15 answers, 1 insufficient_evidence refusal; 0 retries, 0 queueing.
+  - 48 stand-in calls, all HTTP 200; 27,053 tokens reconcile with daily_budget.json.
+  - first_token_ms is blank only for the refusal and later than provider TTFT on every
+    answer.
+  - first_token median 4.51 s, max 7.58 s; max arrival lag 20 ms.
+  - Calibration v1-preliminary, injected and hashed.
+- analyze over -02 and -03: 18/18 reconciliation checks passed (scratch output only;
+  reports/ not generated).
+- Evidence dirs -02/-03/-04 are NOT committed: run_meta, scenario_meta, orchestrator and
+  run_events contain absolute paths with the Windows username. That decision is Ajay's.
+
+**1C: evaluation preparation.** docs/capacity.md, standin.md, experiments.md and
+evaluation.md are written.
+- Synthetic stand-in dry run of evaluate (2 questions × 3 settings): plumbing OK.
+- The dry run showed that the local 6K TPM gate plus back-to-back requests produce rate
+  waits of up to 49 s and one deadline hit, so the real pacing was revised to 55 s
+  spacing.
+- Found and fixed: a questions or grade CSV saved with a BOM (Excel/PowerShell) was
+  rejected, or its grades were lost on rebuild.
+
+Checks: ruff clean; mypy (Windows and Linux) clean; exporter `mypy --strict` clean;
+pytest 254 passed (full suite, after all fixes).
+
 ---
 
 ## Known issues
@@ -395,5 +453,4 @@ Human-reported results, verified by the assistant against `evidence/real/real-sm
 ---
 
 ## Next task
-See docs/next-session.md (handoff 2026-11-12). First task: commit the preserved
-uncommitted changes on feat/experiments, then run the five stand-in scenarios.
+See docs/next-session.md (updated 2026-11-12, after checkpoint 1A-1C).

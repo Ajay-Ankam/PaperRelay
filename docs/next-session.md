@@ -1,4 +1,4 @@
-# Next-session handoff (verified 2026-11-12; checkpoint pushed to origin/feat/experiments)
+# Next-session handoff (updated 2026-11-12 after checkpoint 1A-1C; pushed to origin/feat/experiments)
 
 ## Goal and dates
 PaperRelay is a research assistant over three pinned arXiv papers (1706.03762v7,
@@ -20,8 +20,11 @@ brief is `assignment_description.md`, which is git-ignored.
 - Ajay merged PR #4 (feat/experiments through `bf743ea`, which includes the Linux mypy fix
   and the offline quota-gate fix) into `origin/main` as `7c04d7b`. CI passed on Linux
   before the merge.
-- Left untracked on purpose: `evidence/stand-in/standin-steady-20261112-01/`, the aborted
-  run. See Evidence.
+- Checkpoint 1A-1C commits, all pushed: `1daa134`, `fe94e7a`, `264d05b`, `8b8b9a5`,
+  `3247f25`, plus the handoff commit (see `git log -3`). Not merged into main: the
+  experiments are unfinished.
+- Left untracked: all of `evidence/stand-in/` (runs -01 to -04). See Evidence for the
+  decision Ajay must make.
 - Agent worktrees under `.claude/worktrees/` are clean. Their work is integrated.
   - The reliability agent stopped before writing docs/capacity.md and docs/standin.md.
   - The experiment agent stalled (no progress for 600 s) before writing
@@ -55,19 +58,19 @@ brief is `assignment_description.md`, which is git-ignored.
   - Stand-in arrival order under concurrency is not reproducible.
 
 ## Missing (required)
-- Completed runs of the five scenarios: steady, burst, sustained_overload,
-  limit_halved, daily_exhausted.
+- Completed runs of four scenarios: burst, sustained_overload, limit_halved,
+  daily_exhausted. Steady is done (-04).
 - The retry on/off comparison and the tool-fault run.
-- Generated tables (reports/), the slow-request trace, and an independent review of the
-  new code.
+- Generated tables (reports/) and the slow-request trace.
 - Ajay's 15 or more questions and the real evaluation run (needs an approved budget).
 - Grading, including the smoke answer.
 - Limit-probe evidence; without it, Table 1 must say "not measured".
-- Docs: capacity.md, standin.md, experiments.md, evaluation.md.
 - The report, Vaani feedback, Ajay's reflection, clean reproduction, and the Drive
   submission.
-- Conversation capture is incomplete: the prompt-04 response was never produced (that
-  session was interrupted) and is not recreated.
+- Conversation capture: the prompt-04 response was never produced (that session was
+  interrupted) and is not recreated. Automatic export now runs; see
+  [conversation-capture.md](conversation-capture.md). The redacted copies under
+  `private/conversations/*/submission_redacted/` need Ajay's review before sharing.
 
 ## Interfaces and commands (PowerShell, repo root)
 The contract is [interfaces-m3.md](interfaces-m3.md). Capacity and stand-in settings
@@ -78,7 +81,8 @@ are listed in it.
 .\.venv\Scripts\python.exe scripts\build_index.py          # indexes (git-ignored) if data\indexes is missing
 .\.venv\Scripts\python.exe -m uvicorn paperrelay.api.main:app --port 8000   # offline by default
 .\.venv\Scripts\python.exe -m streamlit run src\paperrelay\ui\app.py
-.\.venv\Scripts\python.exe -m paperrelay.experiments.run --scenario experiments\scenarios\steady.json --run-id standin-steady-20261112-02 --api-port 8310 --standin-port 8311
+.\.venv\Scripts\python.exe -m paperrelay.experiments.run --scenario experiments\scenarios\steady.json --run-id standin-<name>-YYYYMMDD-NN --api-port 8310 --standin-port 8311
+.\.venv\Scripts\python.exe scripts\export_conversations.py --input <transcript.jsonl>   # manual export; the Stop hook does it automatically
 .\.venv\Scripts\python.exe -m paperrelay.experiments.analyze --runs <run dirs> --out reports\
 .\.venv\Scripts\python.exe -m paperrelay.experiments.evaluate --help      # real evaluation; NOT authorized yet
 .\.venv\Scripts\python.exe -m paperrelay.experiments.limit_probe --help   # NOT authorized
@@ -99,19 +103,25 @@ Run ids must be new: the orchestrator refuses to overwrite an existing run direc
 
 **Offline double:** `evidence/offline-double/*`. Functional checks only, never evidence.
 
-**Stand-in:** only `evidence/stand-in/standin-steady-20261112-01/`, which is ABORTED and
-incomplete:
-- interrupted about 54 s into a 100 s window;
-- 4/16 requests answered;
-- no results.csv;
-- run on commit `1187b39-dirty`.
-
-It is not committed. Never delete it, never call it successful, and never use it in tables.
+**Stand-in** (`evidence/stand-in/`, all uncommitted):
+- `-01`: ABORTED (interrupted about 54 s in, no results.csv, `1187b39-dirty`). Never
+  delete it and never use it in tables.
+- `-02`: completed 16/16 on `9284c1d`. Written before the incremental-results fix.
+- `-03`: completed 16/16 and passed every data check, but is labelled `8b8b9a5-dirty`
+  because docs were edited while it started; the executed code matched `8b8b9a5`.
+- **`-04`: the reference steady run.** Clean `3247f25` at start and end; 16/16
+  rows/terminal records; 15 answers and 1 refusal; 48 calls; 27,053 tokens reconciled.
+- **Decision for Ajay:** the run_meta, scenario_meta, orchestrator and run_events files
+  contain absolute paths with the Windows username, and committed evidence has none so
+  far. Either (a) commit the raw files as they are, accepting the username, or
+  (b) change the runner to record repo-relative paths, re-run steady, and commit only
+  clean runs. Raw files are never rewritten.
 
 **Authorization:**
 - Zero additional real Groq calls are authorized.
-- The proposed budget in [real-work-plan.md](real-work-plan.md) (≤245 calls, ≤~156K
-  tokens) awaits Ajay's approval.
+- The proposed budget in [evaluation.md](evaluation.md) §3 (evaluation: 180 calls /
+  160K tokens, retries off, 55 s spacing; probe: 45 calls / ~6K tokens) awaits Ajay's
+  approval. It supersedes real-work-plan.md for the evaluation.
 - Never delete or reset `evidence/real/call_ledger.json`, never raise existing run
   ceilings, and never switch models.
 
@@ -131,20 +141,22 @@ It is not committed. Never delete it, never call it successful, and never use it
 - No separate latency pilot; evaluation calls are reused for calibration.
 
 ## Ordered remaining tasks (critical path in bold)
-1. Done in this checkpoint: preserved changes committed and pushed.
+1. Done: preserved changes committed; checkpoint 1A-1C (capture, incremental results,
+   steady -04, docs, evaluation plan).
 2. Before every push, run `.\.venv\Scripts\python.exe -m mypy --platform linux` as well as plain `mypy`. CI runs on Linux, so Windows-only constants
    (e.g. `subprocess.CREATE_NEW_PROCESS_GROUP`) must sit inside an
    `if sys.platform == "win32":` block.
 3. **Run the stand-in scenarios** with new run ids:
-   - required: steady, burst, sustained_overload, limit_halved, daily_exhausted;
+   - required: burst, sustained_overload, limit_halved, daily_exhausted (steady done);
    - also retry_on, retry_off and tool_faults.
    Check that every scheduled request has one `results.csv` row and that
    `daily_exhausted` actually hits exhaustion.
 4. **Generate the tables** with `analyze`, then inspect reconciliation, the slow-request
    breakdown and the retry comparison. Report the retry outcome as observed.
-5. Run an independent quality review of the capacity, stand-in and analysis code, and fix
-   material defects. Test the `min_attempt_s` guards.
-6. Write docs/capacity.md, standin.md, experiments.md and evaluation.md (short).
+5. Done: the quality review of the load runner/run integrity and the exporter; material
+   defects fixed. Still open: review the capacity and stand-in internals under fault
+   scenarios.
+6. Done: docs/capacity.md, standin.md, experiments.md and evaluation.md.
 7. **Ajay:**
    - Author 15 or more questions in `eval/questions.csv` from `eval/questions_template.csv`.
      Include unanswerable, table/numeric, cross-paper and ambiguous-terminology questions,
@@ -170,12 +182,15 @@ It is not committed. Never delete it, never call it successful, and never use it
   columns; that is an honest disclosure, not a completed experiment.
 
 ## Exact next action
-Check `git status` and `git log -3`. Then run the first complete stand-in scenario:
+1. Ajay decides how the stand-in evidence is committed (see Evidence: option a or b).
+2. Then run the next scenario. **Do not edit tracked files while a run is going**: any
+   tracked change marks the run `-dirty`.
 ```powershell
-.\.venv\Scripts\python.exe -m paperrelay.experiments.run --scenario experiments\scenarios\steady.json --run-id standin-steady-20261112-02 --api-port 8310 --standin-port 8311
+.\.venv\Scripts\python.exe -m paperrelay.experiments.run --scenario experiments\scenarios\burst.json --run-id standin-burst-20261112-01 --api-port 8310 --standin-port 8311
 ```
-Check that results.csv has 16 rows, one per scheduled request. Then run the other
-scenarios with new run ids.
+3. Check results_status.json (`completed`), rows = scheduled, unique ids, clean revision.
+4. In parallel, Ajay writes `eval/questions.csv` (schema in [evaluation.md](evaluation.md) §1)
+   and runs the stand-in dry run in §2.
 
 Additional real Groq calls still require an explicitly agreed call and token budget
-(proposal: docs/real-work-plan.md). None is authorized.
+(proposal: docs/evaluation.md section 3). None is authorized.
