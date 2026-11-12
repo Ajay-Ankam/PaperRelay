@@ -1,0 +1,5 @@
+request_id,question_id,setting,answer_grade,notes
+e1,q1,small,correct,
+e2,q2,small,refused_correctly,
+e3,q3,small,,
+e4,q4,small,wrong,
