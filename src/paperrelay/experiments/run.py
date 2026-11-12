@@ -108,7 +108,11 @@ class Proc:
         self.cmd = cmd
         self.log_path = log_path
         self._log: IO[bytes] = open(log_path, "wb")
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        # Statement-form platform check: mypy narrows `if sys.platform == ...` blocks, but
+        # not conditional expressions, and the constant only exists in Windows stubs.
+        flags = 0
+        if sys.platform == "win32":
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP
         self.popen = subprocess.Popen(cmd, cwd=str(REPO_ROOT), env=env, stdout=self._log,
                                       stderr=subprocess.STDOUT, creationflags=flags)
         self.started_utc = datetime.now(UTC).isoformat()
