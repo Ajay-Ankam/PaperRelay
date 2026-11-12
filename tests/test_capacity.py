@@ -192,6 +192,58 @@ async def test_minute_gate_rejects_instead_of_waiting_past_the_deadline(tmp_path
     assert time.perf_counter() - t < 0.15  # decided up front, not after sleeping
 
 
+# --------------------------------------------------------------------- min_attempt_s guards
+
+async def test_request_admitted_from_queue_without_time_for_an_attempt_ends_queue_deadline(
+        tmp_path):
+    # min_attempt_s defaults to 1.0. "b" waits ~0.45 s in the queue and is admitted with
+    # ~0.7 s of its 1.2 s deadline left: still alive, but under min_attempt_s. Without the
+    # guard it would run (the scripted provider is instant) and answer.
+    cap = capacity(tmp_path, conc=1, queue=4)
+    holder = runner(ScriptedProvider(many(1, first_delay=0.5)), cap, deadline_s=5.0)
+    provider = ScriptedProvider(many(1))
+    late = runner(provider, cap, deadline_s=1.2)
+    a, b = await asyncio.gather(ask(holder, "a"), ask(late, "b", 0.05))
+    assert a.status == "answered"
+    assert b.status == "timeout" and b.reason == "queue_deadline"
+    assert b.provider_calls == 0 and provider.stages() == []
+    assert b.queue_wait_ms < 1100  # admitted before its deadline: the guard decided
+    assert (cap.admission.in_flight, cap.admission.queue_depth) == (0, 0)
+
+
+async def test_unqueued_request_with_a_short_deadline_is_not_cut_by_the_admission_guard(
+        tmp_path):
+    # The admission guard applies only to requests that actually waited in the queue.
+    cap = capacity(tmp_path, conc=1, queue=4)
+    _, result = await runner(ScriptedProvider(many(1)), cap, deadline_s=0.9).run(
+        PipelineRequest(question=QUESTION, request_id="solo"))
+    assert result.status == "answered" and result.queue_wait_ms < 50
+
+
+async def test_minute_gate_wait_must_leave_min_attempt_s_for_the_call(tmp_path):
+    # rpm=1 per 1.0 s window: the draft call must wait ~1.0 s after interpret. With a 1.5 s
+    # deadline that wait would fit the deadline itself, but not deadline - min_attempt_s
+    # (1.0), so the gate rejects up front instead of sleeping into a doomed call.
+    cap = capacity(tmp_path, conc=1, queue=4, window_s=1.0, rpm=1)
+    provider = ScriptedProvider(many(1))
+    t = time.perf_counter()
+    _, result = await runner(provider, cap, deadline_s=1.5).run(
+        PipelineRequest(question=QUESTION, request_id="r"))
+    assert result.status == "rate_limited"
+    assert result.reason == "minute_budget_wait_exceeds_deadline"
+    assert provider.stages() == ["interpret"] and result.provider_calls == 1
+    assert time.perf_counter() - t < 0.5  # rejected without waiting
+
+
+async def test_minute_gate_wait_that_leaves_min_attempt_s_proceeds(tmp_path):
+    # Same gate with a 4.0 s deadline. interpret, draft and verify need two ~1 s waits;
+    # the verify wait ends at ~2.0 s, before deadline - min_attempt_s (3.0 s), so it fits.
+    cap = capacity(tmp_path, conc=1, queue=4, window_s=1.0, rpm=1)
+    _, result = await runner(ScriptedProvider(many(1)), cap, deadline_s=4.0).run(
+        PipelineRequest(question=QUESTION, request_id="r"))
+    assert result.status == "answered" and result.rate_wait_ms >= 900
+
+
 async def test_token_reservation_is_reconciled_to_reported_usage(tmp_path):
     gate = QuotaGate(big_limits(tpm=1000), tmp_path / "d.json", window_s=30.0)
     res = await gate.reserve("r1", 800, time.perf_counter() + 5)
