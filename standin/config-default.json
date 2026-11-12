@@ -1,0 +1,36 @@
+{
+  "model": "openai/gpt-oss-20b",
+  "seed": 0,
+  "calibration": "standin/calibration-v1-preliminary.json",
+  "usage_chars_per_token": 4.0,
+  "latency": {
+    "stages": {},
+    "tail_probability": 0.05,
+    "tail_multiplier": 4.0,
+    "slowdown_per_inflight": 0.25,
+    "slowdown_free_inflight": 1,
+    "time_scale": 1.0,
+    "chunks": 6
+  },
+  "limits": {
+    "rpm": 30,
+    "tpm": 8000,
+    "rpd": 1000,
+    "tpd": 200000
+  },
+  "faults": {
+    "error_rate": 0.0,
+    "error_status": 503,
+    "malformed_rate": 0.0,
+    "malformed_mode": "truncate"
+  },
+  "clock": {
+    "day_offset_s": 0.0
+  },
+  "notes": [
+    "Stage first-content/stream medians and completion tokens come from the calibration file (preliminary, 6 real calls).",
+    "SYNTHETIC design choices, not measured: lognormal sigma, tail_probability 0.05 x4, slowdown +25% per in-flight call beyond 1, error/malformed rates 0 by default, chunk count.",
+    "Limits: tpm 8000 and rpd 1000 match the header-advertised values on the real smoke run; rpm 30 and tpd 200000 follow documented gpt-oss-20b free-tier values (re-verify docs). Enforcement semantics are synthetic.",
+    "Content is synthetic-extractive JSON for pipeline mechanics only; it is not model-quality evidence."
+  ]
+}

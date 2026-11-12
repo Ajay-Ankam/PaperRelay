@@ -79,6 +79,10 @@ class OfflineExtractiveProvider:
             })
         return {"verdicts": verdicts}
 
+    def respond(self, kind: str, user: str) -> dict[str, object]:
+        handler = {"interpret": self._interpret, "draft": self._draft, "verify": self._verify}
+        return handler[kind](user)
+
     async def complete(self, request: ChatRequest, ctx: CallContext) -> ChatResult:
         t_send = time.perf_counter()
         user = request.messages[-1]["content"]
@@ -87,3 +91,13 @@ class OfflineExtractiveProvider:
         call = make_call(self, request, ctx, status="ok", t_send=t_send, streamed=False)
         ctx.record(call)
         return ChatResult(content, call)
+
+
+def detect_stage(user: str) -> str:
+    """Infer the pipeline stage from prompt structure only (the stand-in is not told the
+    stage): claim tags -> verify, passage tags -> draft, otherwise interpret."""
+    if _CLAIM.search(user):
+        return "verify"
+    if _PASSAGE.search(user):
+        return "draft"
+    return "interpret"

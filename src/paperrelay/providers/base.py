@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from paperrelay.contracts import CallStatus, ProviderCall, Source, Usage
 
@@ -38,7 +39,7 @@ class ChatRequest:
 @dataclass
 class CallContext:
     request_id: str
-    request_t0: float  # time.perf_counter() at pipeline request start
+    request_t0: float  # time.perf_counter() at pipeline request start (server clock)
     timeout_s: float
     attempt: int = 1
     record: Callable[[ProviderCall], None] = field(default=lambda call: None)
@@ -104,6 +105,8 @@ def make_call(
     error: str | None = None,
     headers: dict[str, str] | None = None,
     finish_reason: str | None = None,
+    retryable: bool | None = None,
+    limit_scope: Literal["minute", "day"] | None = None,
 ) -> ProviderCall:
     now = time.perf_counter()
     headers = headers or {}
@@ -128,4 +131,25 @@ def make_call(
         error=error,
         rate_limit_headers=headers,
         retry_after=headers.get("retry-after"),
+        retryable=retryable,
+        limit_scope=limit_scope,
     )
+
+
+# Phrases Groq uses for daily limits in 429 messages ("... on requests per day (RPD)").
+_DAY_PATTERN = re.compile(r"per[ -]day|\brpd\b|\btpd\b|\bdaily\b", re.IGNORECASE)
+
+
+def classify_429(message: str, headers: dict[str, str]) -> Literal["minute", "day"]:
+    """Day scope when the message names a per-day limit, or when the request counter
+    (which Groq documents as requests-per-day) is at zero; otherwise minute scope."""
+    if _DAY_PATTERN.search(message):
+        return "day"
+    if headers.get("x-ratelimit-remaining-requests", "").strip() == "0":
+        return "day"
+    return "minute"
+
+
+def http_status_retryable(status: int) -> bool:
+    """5xx and 429 may succeed later; other 4xx (400/401/403/404/413/422) will not."""
+    return status >= 500 or status == 429
