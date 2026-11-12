@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "model": "openai/gpt-oss-20b",
+  "notes": "value/evidence/confidence per item and kind; kinds are never merged. Unknown concurrency is not an established ceiling.",
+  "items": {
+    "rpm": {
+      "documented": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "documented"
+      },
+      "header_advertised": {
+        "value": null,
+        "kind": "header_advertised",
+        "confidence": "none",
+        "evidence": "not advertised in recorded x-ratelimit-* headers"
+      },
+      "observed": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "observed"
+      }
+    },
+    "tpm": {
+      "documented": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "documented"
+      },
+      "header_advertised": {
+        "value": 8000,
+        "evidence": "x-ratelimit-limit-tokens in limit_snapshot_json of 2 real results.csv row(s) (runs: real-smoke-20261112-01); interpreted as TPM per Groq docs (re-verify current docs)",
+        "confidence": "medium: consistent across rows; header meaning taken from docs",
+        "kind": "header_advertised",
+        "rows": 2
+      },
+      "observed": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "observed"
+      }
+    },
+    "rpd": {
+      "documented": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "documented"
+      },
+      "header_advertised": {
+        "value": 1000,
+        "evidence": "x-ratelimit-limit-requests in limit_snapshot_json of 2 real results.csv row(s) (runs: real-smoke-20261112-01); interpreted as RPD per Groq docs (re-verify current docs)",
+        "confidence": "medium: consistent across rows; header meaning taken from docs",
+        "kind": "header_advertised",
+        "rows": 2
+      },
+      "observed": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "observed"
+      }
+    },
+    "tpd": {
+      "documented": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "documented"
+      },
+      "header_advertised": {
+        "value": null,
+        "kind": "header_advertised",
+        "confidence": "none",
+        "evidence": "not advertised in recorded x-ratelimit-* headers"
+      },
+      "observed": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "observed"
+      }
+    },
+    "concurrency": {
+      "documented": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "documented"
+      },
+      "header_advertised": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "header_advertised"
+      },
+      "observed": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "observed"
+      }
+    },
+    "limit_response": {
+      "documented": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "documented"
+      },
+      "header_advertised": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "header_advertised"
+      },
+      "observed": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "observed"
+      }
+    },
+    "recovery": {
+      "documented": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "documented"
+      },
+      "header_advertised": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "header_advertised"
+      },
+      "observed": {
+        "value": null,
+        "evidence": "not measured",
+        "confidence": "none",
+        "kind": "observed"
+      }
+    }
+  }
+}

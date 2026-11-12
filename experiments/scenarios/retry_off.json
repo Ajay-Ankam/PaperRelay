@@ -1,0 +1,43 @@
+{
+  "name": "retry_off",
+  "description": "Paired retry comparison: identical workload, seed, request ids and stand-in faults (8% transient 5xx; stand-in minute limits 40 RPM / 24000 TPM, tighter than the gate's 96 / 48000 so upstream minute 429s occur); only PAPERRELAY_RETRY_MAX differs. Outcome not presumed. Retries off (RETRY_MAX=0).",
+  "source": "stand-in",
+  "retrieval_setting": "medium",
+  "questions_file": "experiments/workload_questions.txt",
+  "client_timeout_s": 50,
+  "lag_threshold_ms": 250,
+  "max_requests": 80,
+  "max_runtime_s": 180,
+  "server_record_wait_s": 15,
+  "capacity_poll_s": 1.0,
+  "standin_config_base": null,
+  "calibration_file": null,
+  "limits_note": "Gate and stand-in minute limits are workload-scaled synthetic values (stand-in 120 RPM / 60000 TPM, gate at 80%), not real Groq limits, so a 3-minute run yields enough requests. Real header-advertised values are in experiments/limits_evidence.json.",
+  "seed": 606,
+  "requests": 40,
+  "window_s": 100,
+  "arrival": "poisson",
+  "api_env": {
+    "PAPERRELAY_MAX_CONCURRENCY": "4",
+    "PAPERRELAY_MAX_QUEUE": "16",
+    "PAPERRELAY_RPM": "96",
+    "PAPERRELAY_TPM": "48000",
+    "PAPERRELAY_RPD": "5000",
+    "PAPERRELAY_TPD": "2000000",
+    "PAPERRELAY_RETRY_MAX": "0",
+    "PAPERRELAY_RETRY_SEED": "0",
+    "PAPERRELAY_DEADLINE_S": "45"
+  },
+  "standin_config": {
+    "limits": {
+      "rpm": 40,
+      "tpm": 24000,
+      "rpd": 6000,
+      "tpd": 2500000
+    },
+    "seed": 606,
+    "faults": {
+      "http_5xx_rate": 0.08
+    }
+  }
+}

@@ -1,0 +1,7 @@
+request_id,scenario,source,start_time,first_token_ms,total_ms,status,retries,tokens_in,tokens_out,retrieval_setting,answer_grade,run_id,question_id,model,pipeline_commit,config_hash,seed,scheduled_start_time,actual_send_time,offered_window_s,arrival_lag_ms,outcome_reason,queue_peak_observed,tokens_usage_complete,provider_first_token_ms,waiting_ms,working_ms,retry_wait_ms,answer_delivery_ms,cost_usd,cost_basis,limit_snapshot_json
+r1,burst,stand-in,2026-11-12T10:00:00+00:00,100.0,200.0,ok,0,100,20,medium,,fx-burst,,fx-model,fxcommit,fxhash,202,,2026-11-12T10:00:00+00:00,5.0,1.0,,1,True,,,,,,,not_measured,
+r2,burst,stand-in,2026-11-12T10:00:00+00:00,300.0,500.0,ok,1,200,30,medium,,fx-burst,,fx-model,fxcommit,fxhash,202,,2026-11-12T10:00:00+00:00,5.0,2.0,,3,True,,,,,,,not_measured,
+r3,burst,stand-in,2026-11-12T10:00:00+00:00,,400.0,ok,0,150,10,medium,,fx-burst,,fx-model,fxcommit,fxhash,202,,2026-11-12T10:00:00+00:00,5.0,3.0,insufficient_evidence,2,True,,,,,,,not_measured,
+r4,burst,stand-in,2026-11-12T10:00:00+00:00,,50.0,rate_limited,0,0,0,medium,,fx-burst,,fx-model,fxcommit,fxhash,202,,2026-11-12T10:00:00+00:00,5.0,300.0,admission_queue_full,5,True,,,,,,,not_measured,
+r5,burst,stand-in,2026-11-12T10:00:00+00:00,,1000.0,timeout,2,80,5,medium,,fx-burst,,fx-model,fxcommit,fxhash,202,,2026-11-12T10:00:00+00:00,5.0,4.0,client_abandoned,4,False,,,,,,,not_measured,
+r6,burst,stand-in,,,,error,,,,medium,,fx-burst,,fx-model,fxcommit,fxhash,202,,,5.0,,not_sent:runner_runtime_cap,,,,,,,,,not_measured,

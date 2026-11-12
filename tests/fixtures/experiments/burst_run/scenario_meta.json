@@ -1,0 +1,4 @@
+{
+  "requests": 6,
+  "lag_threshold_ms": 250.0
+}
