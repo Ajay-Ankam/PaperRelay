@@ -134,7 +134,7 @@ class CeilingGuardProvider:
     async def complete(self, request: ChatRequest, ctx: CallContext) -> ChatResult:
         if not self.ledger.reserve(ctx.request_id):
             call = make_call(
-                self, request, ctx, status="refused_by_ceiling", t_send=time.monotonic(),
+                self, request, ctx, status="refused_by_ceiling", t_send=time.perf_counter(),
                 streamed=False, sent=False,
                 error=f"real call ceiling {self.ledger.ceiling} reached",
             )

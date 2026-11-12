@@ -96,7 +96,7 @@ async def _read_sse(resp: httpx.Response) -> tuple[str, float | None, Usage, str
             # delta.reasoning (if any) is deliberately ignored: never surfaced.
             if isinstance(piece, str) and piece:
                 if first is None:
-                    first = time.monotonic()
+                    first = time.perf_counter()
                 parts.append(piece)
     if not done:
         raise _StreamError("stream ended without [DONE]")
@@ -175,7 +175,7 @@ class GroqProvider:
     async def complete(self, request: ChatRequest, ctx: CallContext) -> ChatResult:
         body, streamed = self.build_body(request)
         auth = {"Authorization": f"Bearer {self._api_key}"}
-        t_send = time.monotonic()
+        t_send = time.perf_counter()
         http_status: int | None = None
         headers: dict[str, str] = {}
         first: float | None = None

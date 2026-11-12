@@ -38,13 +38,13 @@ class ChatRequest:
 @dataclass
 class CallContext:
     request_id: str
-    request_t0: float  # time.monotonic() at pipeline request start
+    request_t0: float  # time.perf_counter() at pipeline request start
     timeout_s: float
     attempt: int = 1
     record: Callable[[ProviderCall], None] = field(default=lambda call: None)
 
     def offset_ms(self, t: float | None = None) -> float:
-        return round(((t if t is not None else time.monotonic()) - self.request_t0) * 1000, 3)
+        return round(((t if t is not None else time.perf_counter()) - self.request_t0) * 1000, 3)
 
 
 @dataclass
@@ -105,7 +105,7 @@ def make_call(
     headers: dict[str, str] | None = None,
     finish_reason: str | None = None,
 ) -> ProviderCall:
-    now = time.monotonic()
+    now = time.perf_counter()
     headers = headers or {}
     return ProviderCall(
         request_id=ctx.request_id,

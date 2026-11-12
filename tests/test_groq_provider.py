@@ -43,7 +43,7 @@ def provider_with(handler, json_mode="stream_prompt") -> tuple[GroqProvider, lis
 
 
 def ctx(records: list, timeout_s: float = 5.0) -> CallContext:
-    return CallContext("r1", time.monotonic(), timeout_s, record=records.append)
+    return CallContext("r1", time.perf_counter(), timeout_s, record=records.append)
 
 
 def content_chunk(text: str) -> dict:
