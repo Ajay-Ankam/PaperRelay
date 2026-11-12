@@ -1,8 +1,15 @@
-"""interpret -> retrieval tool -> draft -> (at most one evidence expansion) -> verify -> delivery.
+"""admission -> interpret -> retrieval tool -> draft -> (at most one evidence expansion) ->
+verify -> delivery.
 
 Answer text leaves the server only after verification passes. Drafts, search queries and
 verifier output stay internal (server evidence logs only). Every request ends with exactly
 one terminal event; a cancelled request is logged but cannot be sent to a gone client.
+
+Capacity and retries (Milestone 3, docs/interfaces-m3.md sections 3-4): one deadline from
+receipt covers queueing, rate waits, calls, retries and delivery. Within one request the
+pipeline is sequential, so queue wait, rate wait, retry wait and the remaining working time
+partition server_total_ms without overlap. One retry budget is shared by every provider
+stage and the retrieval tool. Server clock: time.perf_counter().
 """
 
 from __future__ import annotations
@@ -12,11 +19,22 @@ import contextlib
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import Any, Protocol
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from pydantic import BaseModel
 
+from paperrelay.capacity.admission import AdmissionRejected, Ticket
+from paperrelay.capacity.faults import Fault, InjectedToolError, RetrievalFaults
+from paperrelay.capacity.manager import Capacity
+from paperrelay.capacity.quota import QuotaRejected, Reservation, estimate_tokens
+from paperrelay.capacity.retry import (
+    RetryBudget,
+    RetrySettings,
+    is_retryable,
+    parse_reset_duration,
+    parse_retry_after,
+)
 from paperrelay.contracts import (
     Citation,
     Claim,
@@ -54,10 +72,17 @@ from paperrelay.providers.base import (
 from paperrelay.providers.ledger import CallLedger
 from paperrelay.retrieval.retrieve import Passage, Retriever
 
-# interpret + draft + expanded draft + verify. No retries exist in this milestone.
-MAX_CALLS_PER_REQUEST = 4
+# interpret + draft + expanded draft + verify, before retries.
+BASE_CALLS_PER_REQUEST = 4
 MAX_CLAIMS = 5
 MAX_CLAIM_CHARS = 600
+_DEADLINE_SLACK_S = 0.05
+
+
+def max_calls_per_request(retry_max: int) -> int:
+    """Worst-case provider attempts of one request (retries may all hit provider calls)."""
+    return BASE_CALLS_PER_REQUEST + retry_max
+
 
 MESSAGES = {
     "insufficient_evidence": (
@@ -82,6 +107,12 @@ OPERATIONAL = (
     "The request failed for an operational reason ({reason}). This says nothing about "
     "whether the papers answer the question."
 )
+DAILY = (
+    "The assistant has used up its provider budget for today ({reason}), so this question "
+    "was not answered. This says nothing about whether the papers answer it. Please try "
+    "again after the daily budget resets."
+)
+_DAILY_REASONS = ("daily_budget_exhausted", "daily_budget_insufficient", "upstream_429_daily")
 _TERMINAL_KIND: dict[TerminalStatus, EventKind] = {
     "answered": EventKind.DONE,
     "refused": EventKind.REFUSED,
@@ -92,18 +123,6 @@ _TERMINAL_KIND: dict[TerminalStatus, EventKind] = {
 }
 
 
-class RetryPolicy(Protocol):
-    """Extension point for Milestone 3's bounded retry budget."""
-
-    def retry_delay_s(self, error: ProviderError, attempt: int, remaining_s: float) -> float | None:
-        ...
-
-
-class NoRetry:
-    def retry_delay_s(self, error: ProviderError, attempt: int, remaining_s: float) -> float | None:
-        return None
-
-
 @dataclass
 class PipelineDeps:
     provider: ChatProvider
@@ -112,7 +131,11 @@ class PipelineDeps:
     call_timeout_s: float = 30.0
     logger: EvidenceLogger | None = None
     ledger: CallLedger | None = None
-    retry_policy: RetryPolicy = field(default_factory=NoRetry)
+    # Retries are off unless configured (the API passes the env settings, default 2).
+    retry: RetrySettings = field(default_factory=RetrySettings)
+    capacity: Capacity | None = None
+    tool_timeout_s: float = 5.0
+    retrieval_faults: RetrievalFaults = field(default_factory=RetrievalFaults)
     run_info: dict[str, Any] = field(default_factory=dict)
 
 
@@ -131,7 +154,7 @@ class _Run:
     def __init__(self, req: PipelineRequest, deps: PipelineDeps):
         self.req = req
         self.deps = deps
-        self.t0 = time.monotonic()
+        self.t0 = time.perf_counter()
         self.deadline_at = self.t0 + deps.deadline_s
         self.start_utc = _utc()
         self.setting = deps.retriever.config(req.retrieval_setting).name
@@ -140,11 +163,21 @@ class _Run:
         self.first_emit_ms: float | None = None
         self.expansion_used = False
         self.internal: dict[str, Any] = {}
+        self.budget = RetryBudget(deps.retry, req.request_id)
+        self.retries = 0
+        self.queue_wait_s = 0.0
+        self.rate_wait_s = 0.0
+        self.retry_wait_s = 0.0
+        self.ticket = Ticket()
+        self.phase = "received"
+        self.admitted = False
+        self.stage_attempts: dict[str, int] = {}
+        self.tool_attempts = 0
 
     # ------------------------------------------------------------------ plumbing
 
     def _ms(self) -> float:
-        return round((time.monotonic() - self.t0) * 1000, 3)
+        return round((time.perf_counter() - self.t0) * 1000, 3)
 
     def emit(self, kind: EventKind, send: bool = True, **payload: Any) -> PipelineEvent:
         event = PipelineEvent(request_id=self.req.request_id, kind=kind, ts_ms=self._ms(),
@@ -160,28 +193,169 @@ class _Run:
         if self.deps.logger:
             self.deps.logger.call(call)
 
+    def _note(self, key: str, value: Any) -> None:
+        self.internal.setdefault(key, []).append(value)
+
+    # ------------------------------------------------------------------ capacity
+
+    async def _admit(self) -> None:
+        cap = self.deps.capacity
+        if cap is not None:
+            if cap.quota.day_exhausted():
+                raise _Terminal("rate_limited", "daily_budget_exhausted")
+            self.phase = "queued"
+            t = time.perf_counter()
+            try:
+                await cap.admission.acquire(
+                    self.req.request_id, self.ticket,
+                    lambda depth, in_flight: self.emit(
+                        EventKind.QUEUED, queue_depth=depth, in_flight=in_flight),
+                )
+            except AdmissionRejected as exc:
+                raise _Terminal("rate_limited", exc.reason) from None
+            finally:
+                self.queue_wait_s = time.perf_counter() - t
+            self.admitted = True
+            self.emit(EventKind.ADMITTED, queue_wait_ms=round(self.queue_wait_s * 1000, 3),
+                      in_flight=cap.admission.in_flight,
+                      queue_peak_observed=self.ticket.queue_peak_observed)
+            if self.ticket.queued and \
+                    self.deadline_at - time.perf_counter() < self.deps.retry.min_attempt_s:
+                # Admitted too late to do useful work: do not spend a provider call on it.
+                raise _Terminal("timeout", "queue_deadline")
+            self.phase = "running"
+            if not cap.quota.admit(self.req.request_id,
+                                   max_calls_per_request(self.deps.retry.max_retries)):
+                raise _Terminal("rate_limited", "daily_budget_insufficient")
+        self.phase = "running"
+        ledger = self.deps.ledger
+        if ledger is not None and not ledger.admit(
+                self.req.request_id, max_calls_per_request(self.deps.retry.max_retries)):
+            # Admission quota rejection: metrics.md classifies this as rate_limited.
+            raise _Terminal("rate_limited", "local_call_ceiling_insufficient_for_request")
+
+    async def _reserve(self, request: ChatRequest) -> Reservation | None:
+        cap = self.deps.capacity
+        if cap is None:
+            return None
+        estimate = estimate_tokens(request.messages, request.max_completion_tokens,
+                                   cap.chars_per_token)
+
+        waited = False
+
+        def on_wait(wait_s: float, scope: str) -> None:
+            nonlocal waited
+            waited = True
+            self.emit(EventKind.RATE_WAIT, stage=request.stage,
+                      wait_ms=round(wait_s * 1000, 1), scope=scope, estimate_tokens=estimate)
+
+        t = time.perf_counter()
+        # A rate wait must leave time for the call itself (min_attempt_s, a design choice).
+        wait_until = self.deadline_at - self.deps.retry.min_attempt_s
+        try:
+            return await cap.quota.reserve(self.req.request_id, estimate, wait_until, on_wait)
+        except QuotaRejected as exc:
+            if exc.scope == "day":
+                cap.on_day_exhausted()
+            self._note("quota_rejections", {"stage": request.stage, "reason": exc.reason,
+                                            "estimate_tokens": estimate})
+            raise _Terminal("rate_limited", exc.reason) from None
+        finally:
+            # Only a reservation that had to wait counts as rate wait (including the gate
+            # lock wait behind other waiters); plain bookkeeping stays in working time.
+            if waited:
+                self.rate_wait_s += time.perf_counter() - t
+
+    def _settle(self, res: Reservation | None, call: ProviderCall | None) -> None:
+        if res is not None and self.deps.capacity is not None:
+            self.deps.capacity.quota.reconcile(res, call)
+
+    def _upstream_day_exhausted(self, call: ProviderCall) -> None:
+        cap = self.deps.capacity
+        if cap is None:
+            return
+        seconds = parse_reset_duration(call.rate_limit_headers.get("x-ratelimit-reset-requests"))
+        if seconds is None:
+            seconds = parse_retry_after(call.retry_after)
+        until = datetime.now(UTC) + timedelta(seconds=seconds) if seconds is not None else None
+        cap.quota.mark_upstream_day_exhausted(until, f"upstream_429_daily:{call.stage}")
+        cap.on_day_exhausted()
+
+    # ------------------------------------------------------------------ retries
+
+    def _retry_delay(self, retry_after_s: float | None, what: str) -> float | None:
+        """Consume one shared retry if the backoff still leaves time for an attempt."""
+        if self.budget.remaining <= 0:
+            self._note("retry_skipped", {"what": what, "why": "budget_exhausted"})
+            return None
+        delay = self.budget.delay_s(retry_after_s)
+        if (time.perf_counter() + delay + self.deps.retry.min_attempt_s) > self.deadline_at:
+            self._note("retry_skipped", {"what": what, "why": "deadline",
+                                         "delay_s": round(delay, 3)})
+            return None
+        self.budget.used += 1
+        self.retries += 1
+        return delay
+
+    async def _retry_sleep(self, delay: float) -> None:
+        t = time.perf_counter()
+        try:
+            await asyncio.sleep(delay)
+        finally:
+            self.retry_wait_s += time.perf_counter() - t
+
+    async def _after_provider_error(self, err: ProviderError) -> None:
+        """Return to retry; raise to end the request."""
+        call = err.call
+        if isinstance(err, ProviderRateLimited) and call.limit_scope == "day":
+            self._upstream_day_exhausted(call)
+            raise _Terminal("rate_limited", f"upstream_429_daily:{call.stage}") from err
+        if not is_retryable(err):
+            raise err
+        if isinstance(err, ProviderTimeout) and \
+                time.perf_counter() >= self.deadline_at - _DEADLINE_SLACK_S:
+            raise err  # the request deadline, not a retryable call timeout
+        retry_after = parse_retry_after(call.retry_after)
+        delay = self._retry_delay(retry_after, f"{call.stage}#{call.attempt}")
+        if delay is None:
+            raise err
+        self.emit(EventKind.RETRY_WAIT, stage=call.stage, attempt=call.attempt,
+                  delay_ms=round(delay * 1000, 1), cause=call.status,
+                  http_status=call.http_status, retry_after=call.retry_after)
+        await self._retry_sleep(delay)
+
+    # ------------------------------------------------------------------ model calls
+
     async def _model(
         self, stage: str, messages: list[dict[str, str]], schema_name: str,
         schema: dict[str, Any], out: type[BaseModel], max_tokens: int,
     ) -> Any:
         request = ChatRequest(stage, messages, max_tokens, schema_name, schema)
-        attempt = 1
         while True:
-            remaining = self.deadline_at - time.monotonic()
+            attempt = self.stage_attempts[stage] = self.stage_attempts.get(stage, 0) + 1
+            res = await self._reserve(request)
+            remaining = self.deadline_at - time.perf_counter()
             ctx = CallContext(
                 request_id=self.req.request_id, request_t0=self.t0,
                 timeout_s=max(0.001, min(self.deps.call_timeout_s, remaining)),
                 attempt=attempt, record=self._record,
             )
+            self.emit(EventKind.CALL_START, stage=stage, attempt=attempt)
             try:
                 result = await self.deps.provider.complete(request, ctx)
             except ProviderError as err:
-                delay = self.deps.retry_policy.retry_delay_s(err, attempt, remaining)
-                if delay is None:
-                    raise
-                await asyncio.sleep(delay)
-                attempt += 1
+                self._settle(res, err.call)
+                self.emit(EventKind.CALL_END, stage=stage, attempt=attempt,
+                          status=err.call.status, http_status=err.call.http_status,
+                          retryable=err.call.retryable, limit_scope=err.call.limit_scope)
+                await self._after_provider_error(err)
                 continue
+            except BaseException:
+                self._settle(res, None)  # cancelled/deadline: usage unknown, keep reservation
+                raise
+            self._settle(res, result.call)
+            self.emit(EventKind.CALL_END, stage=stage, attempt=attempt, status="ok",
+                      http_status=result.call.http_status)
             try:
                 return parse_output(result.content, out)
             except OutputFormatError as exc:
@@ -189,20 +363,57 @@ class _Run:
                 kind = "truncated" if result.call.finish_reason == "length" else "malformed"
                 raise _Terminal("error", f"{kind}_model_output:{stage}") from exc
 
-    # ------------------------------------------------------------------ stages
+    # ------------------------------------------------------------------ retrieval tool
+
+    async def _search(self, query: str, k: int, fault: Fault | None) -> list[Passage]:
+        if fault == "timeout":
+            await asyncio.sleep(self.deps.tool_timeout_s + 1.0)  # hang past the tool timeout
+        if fault == "error":
+            raise InjectedToolError("injected retrieval fault")
+        # BM25 scoring is CPU work; keep it off the event loop so timers and streams stay live.
+        return await asyncio.to_thread(self.deps.retriever.search, query, self.setting, k)
 
     async def _retrieve(self, query: str, attempt: int, top_k: int | None) -> list[Passage]:
         cfg = self.deps.retriever.config(self.setting)
         k = top_k or cfg.top_k
         self.emit(EventKind.RETRIEVAL_START, attempt=attempt, top_k=k)
-        # BM25 scoring is CPU work; keep it off the event loop so timers and streams stay live.
-        passages = await asyncio.to_thread(self.deps.retriever.search, query, self.setting, k)
+        while True:
+            self.tool_attempts += 1
+            n = self.tool_attempts
+            fault = self.deps.retrieval_faults.decide(self.req.request_id, n)
+            self.emit(EventKind.TOOL_START, tool="retrieval", attempt=n)
+            try:
+                async with asyncio.timeout(self.deps.tool_timeout_s):
+                    passages = await self._search(query, k, fault)
+            except TimeoutError:
+                # Only the tool timeout lands here; the request deadline propagates as
+                # cancellation through this inner scope.
+                self.emit(EventKind.TOOL_END, tool="retrieval", attempt=n, status="timeout",
+                          injected=fault == "timeout")
+                delay = self._retry_delay(None, f"retrieval#{n}")
+                if delay is None:
+                    raise _Terminal("timeout", "tool_timeout:retrieval") from None
+                self.emit(EventKind.RETRY_WAIT, stage="retrieval", attempt=n,
+                          delay_ms=round(delay * 1000, 1), cause="tool_timeout",
+                          retry_after=None)
+                await self._retry_sleep(delay)
+                continue
+            except Exception as exc:
+                self.emit(EventKind.TOOL_END, tool="retrieval", attempt=n, status="error",
+                          injected=fault == "error")
+                self.internal["tool_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+                raise _Terminal("error", "tool_error:retrieval") from exc
+            self.emit(EventKind.TOOL_END, tool="retrieval", attempt=n, status="ok",
+                      passages=len(passages))
+            break
         self.internal[f"retrieval_{attempt}"] = {
             "query": query, "top_k": k, "chunk_ids": [p.chunk_id for p in passages],
         }
         self.emit(EventKind.RETRIEVAL_DONE, attempt=attempt, passages=len(passages),
                   chunk_ids=[p.chunk_id for p in passages])
         return passages
+
+    # ------------------------------------------------------------------ stages
 
     async def _draft(self, question: str, passages: list[Passage], stage: str) -> DraftOut:
         self.emit(EventKind.DRAFT_START, stage=stage, passages=len(passages))
@@ -261,10 +472,7 @@ class _Run:
         question = self.req.question
         self.emit(EventKind.RECEIVED, retrieval_setting=self.setting,
                   source=self.deps.provider.source, model=self.deps.provider.model)
-        ledger = self.deps.ledger
-        if ledger is not None and not ledger.admit(self.req.request_id, MAX_CALLS_PER_REQUEST):
-            # Admission quota rejection: metrics.md classifies this as rate_limited.
-            raise _Terminal("rate_limited", "local_call_ceiling_insufficient_for_request")
+        await self._admit()
 
         self.emit(EventKind.INTERPRET_START)
         interp: InterpretOut = await self._model(
@@ -325,6 +533,8 @@ class _Run:
         sent = [c for c in self.calls if c.sent]
         if status == "refused" and reason:
             message = MESSAGES[reason]
+        elif status == "rate_limited" and reason and reason.startswith(_DAILY_REASONS):
+            message = DAILY.format(reason=reason)
         elif status in ("error", "timeout", "rate_limited", "cancelled"):
             message = OPERATIONAL.format(reason=reason)
         else:
@@ -344,6 +554,11 @@ class _Run:
             tokens_in=sum(c.usage.prompt_tokens or 0 for c in sent),
             tokens_out=sum(c.usage.completion_tokens or 0 for c in sent),
             unknown_usage_calls=sum(1 for c in sent if not c.usage.complete),
+            retries=self.retries,
+            queue_wait_ms=round(self.queue_wait_s * 1000, 3),
+            rate_wait_ms=round(self.rate_wait_s * 1000, 3),
+            retry_wait_ms=round(self.retry_wait_s * 1000, 3),
+            queue_peak_observed=self.ticket.queue_peak_observed,
             server_first_answer_emit_ms=self.first_emit_ms,
             server_total_ms=self._ms(),
             **extra,
@@ -352,11 +567,13 @@ class _Run:
     def _from_provider_error(self, err: ProviderError) -> tuple[TerminalStatus, str]:
         stage = err.call.stage
         if isinstance(err, ProviderRateLimited):
+            if err.call.limit_scope == "day":
+                return "rate_limited", f"upstream_429_daily:{stage}"
             return "rate_limited", f"upstream_429:{stage}"
         if isinstance(err, ProviderTimeout):
             # The call timeout is clamped to the remaining deadline; when both expire
             # together, report the request deadline regardless of timer ordering.
-            if time.monotonic() >= self.deadline_at - 0.05:
+            if time.perf_counter() >= self.deadline_at - _DEADLINE_SLACK_S:
                 return "timeout", "request_deadline"
             return "timeout", f"provider_call_timeout:{stage}"
         if isinstance(err, CallCeilingReached):
@@ -368,9 +585,18 @@ class _Run:
             return "error", f"malformed_upstream_stream:{stage}"
         return "error", f"upstream_error:{stage}"
 
-    def _finish(self, result: PipelineResult, send: bool = True) -> None:
+    def _release(self) -> None:
+        cap = self.deps.capacity
+        if cap is not None:
+            cap.quota.release(self.req.request_id)
+            if self.admitted:
+                self.admitted = False
+                cap.admission.release()
         if self.deps.ledger is not None:
             self.deps.ledger.release(self.req.request_id)
+
+    def _finish(self, result: PipelineResult, send: bool = True) -> None:
+        self._release()
         self.emit(_TERMINAL_KIND[result.status], send=send, **result.model_dump(mode="json"))
         if self.deps.logger:
             self.deps.logger.request({
@@ -378,6 +604,7 @@ class _Run:
                 **self.deps.run_info,
                 "start_utc": self.start_utc,
                 "question": self.req.question,
+                "phase_at_end": self.phase,
                 "internal": self.internal,
             })
 
@@ -386,7 +613,8 @@ class _Run:
             async with asyncio.timeout(self.deps.deadline_s):
                 result = await self._body()
         except TimeoutError:
-            result = self._result("timeout", "request_deadline")
+            reason = "queue_deadline" if self.phase == "queued" else "request_deadline"
+            result = self._result("timeout", reason)
         except _Terminal as term:
             result = self._result(term.status, term.reason)
         except ProviderError as err:

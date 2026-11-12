@@ -14,6 +14,7 @@ from paperrelay.providers.base import (
     ChatRequest,
     ChatResult,
     ProviderHTTPError,
+    ProviderMalformed,
     ProviderRateLimited,
     ProviderTimeout,
     make_call,
@@ -62,10 +63,14 @@ QUESTION = "How many attention heads does the base Transformer use?"
 
 @dataclass
 class Step:
-    payload: Any  # dict -> JSON content; str -> raw content; "429"/"http_error" -> failure
+    """dict -> JSON content; str -> raw content; failures: "429" (minute scope), "429_day",
+    "http_error" (503), "http_401", "malformed" (bad stream)."""
+
+    payload: Any
     delay_s: float = 0.0
     usage: Usage = field(default_factory=Usage)
     finish_reason: str | None = "stop"
+    retry_after: str | None = "7"
 
 
 class ScriptedProvider:
@@ -81,7 +86,7 @@ class ScriptedProvider:
         self.requests.append(request)
         item = self.script[request.stage].pop(0)
         step = item if isinstance(item, Step) else Step(item)
-        t_send = time.monotonic()
+        t_send = time.perf_counter()
         try:
             async with asyncio.timeout(ctx.timeout_s):
                 await asyncio.sleep(step.delay_s)
@@ -93,20 +98,31 @@ class ScriptedProvider:
             ctx.record(make_call(self, request, ctx, status="cancelled", t_send=t_send,
                                  streamed=True))
             raise
-        if step.payload == "429":
-            headers = {"retry-after": "7", "x-ratelimit-remaining-requests": "0"}
+        if step.payload in ("429", "429_day"):
+            day = step.payload == "429_day"
+            headers = {"x-ratelimit-remaining-requests": "0" if day else "900"}
+            if step.retry_after is not None:
+                headers["retry-after"] = step.retry_after
             call = make_call(self, request, ctx, status="rate_limited", t_send=t_send,
-                             streamed=True, http_status=429, headers=headers)
+                             streamed=True, http_status=429, headers=headers,
+                             usage=step.usage, retryable=not day,
+                             limit_scope="day" if day else "minute")
             ctx.record(call)
             raise ProviderRateLimited(call, "http_429")
-        if step.payload == "http_error":
+        if step.payload in ("http_error", "http_401"):
+            status = 401 if step.payload == "http_401" else 503
             call = make_call(self, request, ctx, status="error", t_send=t_send, streamed=True,
-                             http_status=503)
+                             http_status=status, usage=step.usage, retryable=status >= 500)
             ctx.record(call)
-            raise ProviderHTTPError(call, "http_503")
+            raise ProviderHTTPError(call, f"http_{status}")
+        if step.payload == "malformed":
+            call = make_call(self, request, ctx, status="malformed", t_send=t_send,
+                             streamed=True, http_status=200, retryable=False)
+            ctx.record(call)
+            raise ProviderMalformed(call, "stream ended without [DONE]")
         content = step.payload if isinstance(step.payload, str) else json.dumps(step.payload)
         call = make_call(self, request, ctx, status="ok", t_send=t_send, streamed=True,
-                         first_content=time.monotonic(), usage=step.usage,
+                         first_content=time.perf_counter(), usage=step.usage,
                          finish_reason=step.finish_reason)
         ctx.record(call)
         return ChatResult(content, call)

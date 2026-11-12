@@ -43,7 +43,7 @@ def provider_with(handler, json_mode="stream_prompt") -> tuple[GroqProvider, lis
 
 
 def ctx(records: list, timeout_s: float = 5.0) -> CallContext:
-    return CallContext("r1", time.monotonic(), timeout_s, record=records.append)
+    return CallContext("r1", time.perf_counter(), timeout_s, record=records.append)
 
 
 def content_chunk(text: str) -> dict:
@@ -129,6 +129,59 @@ async def test_429_records_redacted_headers_and_retry_after():
     assert call.rate_limit_headers["x-ratelimit-reset-requests"] == "2m59s"
     assert "Rate limit reached" in call.error
     assert records == [call]
+    # The request counter Groq documents as per-day is at zero: day scope, not retryable.
+    assert call.limit_scope == "day" and call.retryable is False
+
+
+@pytest.mark.parametrize("message, remaining, scope", [
+    ("Rate limit reached for model `openai/gpt-oss-20b` on tokens per minute (TPM): "
+     "Limit 8000, Used 7900, Requested 900. Please try again in 6.75s.", "990", "minute"),
+    ("Rate limit reached for model `openai/gpt-oss-20b` on requests per day (RPD): "
+     "Limit 1000, Used 1000, Requested 1. Please try again in 1m26.4s.", "0", "day"),
+    ("Rate limit reached ... on tokens per day (TPD): Limit 200000, Used 199990", "12", "day"),
+    ("Rate limit reached for requests", "4", "minute"),
+])
+async def test_429_scope_classification(message, remaining, scope):
+    async def handler(_):
+        return httpx.Response(429, json={"error": {"message": message, "type": "tokens"}},
+                              headers={"retry-after": "7",
+                                       "x-ratelimit-remaining-requests": remaining})
+
+    provider, _ = provider_with(handler)
+    with pytest.raises(ProviderRateLimited) as info:
+        await provider.complete(REQ, ctx([]))
+    assert info.value.call.limit_scope == scope
+    assert info.value.call.retryable is (scope == "minute")
+
+
+@pytest.mark.parametrize("status, retryable", [(500, True), (503, True), (400, False),
+                                               (401, False), (403, False), (404, False)])
+async def test_http_status_retryability(status, retryable):
+    async def handler(_):
+        return httpx.Response(status, json={"error": {"message": "x", "type": "y"}})
+
+    provider, _ = provider_with(handler)
+    with pytest.raises(ProviderHTTPError) as info:
+        await provider.complete(REQ, ctx([]))
+    assert info.value.call.retryable is retryable and info.value.call.limit_scope is None
+
+
+async def test_malformed_stream_is_not_retryable_and_transport_failure_is():
+    async def bad(_):
+        return httpx.Response(200, content=b"data: {not json}\n\n")
+
+    provider, _ = provider_with(bad)
+    with pytest.raises(ProviderMalformed) as info:
+        await provider.complete(REQ, ctx([]))
+    assert info.value.call.retryable is False
+
+    async def refused(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    provider, _ = provider_with(refused)
+    with pytest.raises(ProviderHTTPError) as err:
+        await provider.complete(REQ, ctx([]))
+    assert err.value.call.retryable is True
 
 
 async def test_http_500_is_upstream_error():

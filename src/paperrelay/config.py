@@ -1,4 +1,8 @@
-"""Runtime settings from environment variables. Secrets are never stored on Settings."""
+"""Runtime settings from environment variables. Secrets are never stored on Settings.
+
+Capacity defaults (docs/interfaces-m3.md section 2) are explicit design choices set below
+the documented/header-advertised gpt-oss-20b limits, not measured optimums.
+"""
 
 from __future__ import annotations
 
@@ -12,10 +16,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from paperrelay.capacity.faults import RetrievalFaults
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-ProviderName = Literal["offline", "groq"]
+ProviderName = Literal["offline", "groq", "standin"]
 JsonMode = Literal["stream_prompt", "strict_schema"]
+STANDIN_PLACEHOLDER_KEY = "standin-local-key"
 
 
 class ConfigError(ValueError):
@@ -29,6 +36,7 @@ class Settings:
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_json_mode: JsonMode = "stream_prompt"
     reasoning_effort: str = "low"
+    standin_url: str = "http://127.0.0.1:8100/openai/v1"
     deadline_s: float = 60.0
     call_timeout_s: float = 30.0
     retrieval_setting: str = "medium"
@@ -37,23 +45,62 @@ class Settings:
     evidence_dir: Path = REPO_ROOT / "evidence"
     run_id: str = ""
     real_call_ceiling: int | None = None
+    # capacity (pipeline requests)
+    max_concurrency: int = 4
+    max_queue: int = 16
+    # provider-call gate
+    rpm: int = 24
+    tpm: int = 6000
+    rpd: int = 900
+    tpd: int = 150000
+    daily_state: Path | None = None  # None -> <evidence>/<source>/daily_budget.json
+    chars_per_token: float = 3.0  # conservative estimate assumption, not a tokenizer
+    # retries (one shared budget per request)
+    retry_max: int = 2
+    retry_base_s: float = 0.5
+    retry_cap_s: float = 8.0
+    retry_seed: int = 0
+    retry_min_attempt_s: float = 1.0
+    # retrieval tool
+    tool_timeout_s: float = 5.0
+    fault_retrieval: str = ""
+    admin: bool = False
 
     @property
-    def source(self) -> Literal["real", "offline-double"]:
-        return "real" if self.provider == "groq" else "offline-double"
+    def source(self) -> Literal["real", "offline-double", "stand-in"]:
+        return {"groq": "real", "standin": "stand-in"}.get(self.provider, "offline-double")  # type: ignore[return-value]
+
+    @property
+    def daily_state_path(self) -> Path:
+        return self.daily_state or self.evidence_dir / self.source / "daily_budget.json"
 
     def public(self) -> dict[str, object]:
         data = asdict(self)
         for key in ("index_dir", "manifest_path", "evidence_dir"):
             data[key] = str(data[key])
+        data["daily_state"] = str(self.daily_state_path)
         return data
+
+
+def _num(env: dict[str, str], name: str, default: float, *, minimum: float = 0.0,
+         integer: bool = False, allow_equal: bool = True) -> float:
+    raw = env.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw) if integer else float(raw)
+    except ValueError:
+        raise ConfigError(f"{name} must be {'an integer' if integer else 'a number'}") from None
+    if value < minimum or (not allow_equal and value == minimum):
+        raise ConfigError(f"{name} must be {'>=' if allow_equal else '>'} {minimum}")
+    return value
 
 
 def load_settings(env: dict[str, str] | None = None) -> Settings:
     env = dict(os.environ) if env is None else env
     provider = env.get("PAPERRELAY_PROVIDER", "offline").strip().lower()
-    if provider not in ("offline", "groq"):
-        raise ConfigError("PAPERRELAY_PROVIDER must be 'offline' or 'groq'")
+    if provider not in ("offline", "groq", "standin"):
+        raise ConfigError("PAPERRELAY_PROVIDER must be 'offline', 'groq' or 'standin'")
     json_mode = env.get("PAPERRELAY_GROQ_JSON_MODE", "stream_prompt")
     if json_mode not in ("stream_prompt", "strict_schema"):
         raise ConfigError("PAPERRELAY_GROQ_JSON_MODE must be 'stream_prompt' or 'strict_schema'")
@@ -72,18 +119,58 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
     if any(c in run_id for c in "/\\:") or run_id.startswith("."):
         raise ConfigError("PAPERRELAY_RUN_ID must be a simple name")
 
-    defaults = Settings()
+    d = Settings()
+    retry_base = _num(env, "PAPERRELAY_RETRY_BASE_S", d.retry_base_s)
+    retry_cap = _num(env, "PAPERRELAY_RETRY_CAP_S", d.retry_cap_s)
+    if retry_cap < retry_base:
+        raise ConfigError("PAPERRELAY_RETRY_CAP_S must be >= PAPERRELAY_RETRY_BASE_S")
+    fault_spec = env.get("PAPERRELAY_FAULT_RETRIEVAL", "").strip()
+    try:
+        RetrievalFaults.parse(fault_spec)
+    except ValueError as exc:
+        raise ConfigError(f"PAPERRELAY_FAULT_RETRIEVAL: {exc}") from None
+    admin_raw = env.get("PAPERRELAY_ADMIN", "0").strip()
+    if admin_raw not in ("0", "1"):
+        raise ConfigError("PAPERRELAY_ADMIN must be 0 or 1")
+    daily_state = env.get("PAPERRELAY_DAILY_STATE", "").strip()
+    index_dir = env.get("PAPERRELAY_INDEX_DIR", "").strip()
+    standin_url = env.get("PAPERRELAY_STANDIN_URL", d.standin_url).strip()
+    if not standin_url.startswith(("http://", "https://")):
+        raise ConfigError("PAPERRELAY_STANDIN_URL must be an http(s) URL")
+
     return Settings(
         provider=provider,  # type: ignore[arg-type]
-        groq_model=env.get("PAPERRELAY_GROQ_MODEL", defaults.groq_model),
+        groq_model=env.get("PAPERRELAY_GROQ_MODEL", d.groq_model),
         groq_json_mode=json_mode,  # type: ignore[arg-type]
-        reasoning_effort=env.get("PAPERRELAY_REASONING_EFFORT", defaults.reasoning_effort),
-        deadline_s=float(env.get("PAPERRELAY_DEADLINE_S", defaults.deadline_s)),
-        call_timeout_s=float(env.get("PAPERRELAY_CALL_TIMEOUT_S", defaults.call_timeout_s)),
-        retrieval_setting=env.get("PAPERRELAY_RETRIEVAL_SETTING", defaults.retrieval_setting),
-        evidence_dir=Path(env.get("PAPERRELAY_EVIDENCE_DIR", str(defaults.evidence_dir))),
+        reasoning_effort=env.get("PAPERRELAY_REASONING_EFFORT", d.reasoning_effort),
+        standin_url=standin_url,
+        deadline_s=_num(env, "PAPERRELAY_DEADLINE_S", d.deadline_s, allow_equal=False),
+        call_timeout_s=_num(env, "PAPERRELAY_CALL_TIMEOUT_S", d.call_timeout_s,
+                            allow_equal=False),
+        retrieval_setting=env.get("PAPERRELAY_RETRIEVAL_SETTING", d.retrieval_setting),
+        index_dir=Path(index_dir) if index_dir else d.index_dir,
+        evidence_dir=Path(env.get("PAPERRELAY_EVIDENCE_DIR", str(d.evidence_dir))),
         run_id=run_id,
         real_call_ceiling=ceiling,
+        max_concurrency=int(_num(env, "PAPERRELAY_MAX_CONCURRENCY", d.max_concurrency,
+                                 minimum=1, integer=True)),
+        max_queue=int(_num(env, "PAPERRELAY_MAX_QUEUE", d.max_queue, integer=True)),
+        rpm=int(_num(env, "PAPERRELAY_RPM", d.rpm, minimum=1, integer=True)),
+        tpm=int(_num(env, "PAPERRELAY_TPM", d.tpm, minimum=1, integer=True)),
+        rpd=int(_num(env, "PAPERRELAY_RPD", d.rpd, minimum=1, integer=True)),
+        tpd=int(_num(env, "PAPERRELAY_TPD", d.tpd, minimum=1, integer=True)),
+        daily_state=Path(daily_state) if daily_state else None,
+        chars_per_token=_num(env, "PAPERRELAY_CHARS_PER_TOKEN", d.chars_per_token,
+                             allow_equal=False),
+        retry_max=int(_num(env, "PAPERRELAY_RETRY_MAX", d.retry_max, integer=True)),
+        retry_base_s=retry_base,
+        retry_cap_s=retry_cap,
+        retry_seed=int(_num(env, "PAPERRELAY_RETRY_SEED", d.retry_seed, integer=True)),
+        retry_min_attempt_s=_num(env, "PAPERRELAY_RETRY_MIN_ATTEMPT_S", d.retry_min_attempt_s),
+        tool_timeout_s=_num(env, "PAPERRELAY_TOOL_TIMEOUT_S", d.tool_timeout_s,
+                            allow_equal=False),
+        fault_retrieval=fault_spec,
+        admin=admin_raw == "1",
     )
 
 
@@ -120,7 +207,8 @@ def git_revision() -> str:
 
 
 def config_hash(settings: Settings, extra: dict[str, object]) -> str:
-    payload = {k: v for k, v in settings.public().items() if k not in ("run_id", "evidence_dir")}
+    payload = {k: v for k, v in settings.public().items()
+               if k not in ("run_id", "evidence_dir", "daily_state")}
     payload.update(extra)
     blob = json.dumps(payload, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
