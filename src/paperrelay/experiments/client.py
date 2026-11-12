@@ -149,11 +149,14 @@ def _num(value: Any) -> float | None:
 
 def build_row(obs: dict[str, Any], terminal: dict[str, Any] | None, meta: dict[str, Any],
               server: dict[str, Any] | None, *, scenario: str, question_id: str,
-              extra: dict[str, Any]) -> dict[str, Any]:
+              extra: dict[str, Any],
+              diagnostics: dict[str, Any] | None = None) -> dict[str, Any]:
     """One results.csv row (smoke.COLUMNS order is applied by the CSV writer).
 
     `extra` carries run-level fields: run_id, seed, scheduled_start_time,
     offered_window_s, arrival_lag_ms, pipeline_commit/config_hash fallbacks.
+    `diagnostics`, if given, receives partition_inconsistent (and the raw components when
+    true) so the caller can record it; the CSV schema is unchanged.
     """
     obs = {**obs, "scenario": scenario, "question_id": question_id}
     if terminal is None and server is None and obs.get("client_reason") == "http_429":
@@ -174,8 +177,21 @@ def build_row(obs: dict[str, Any], terminal: dict[str, Any] | None, meta: dict[s
     # total, with client/network overhead classified as working). Blank if the server
     # reported neither component: it cannot be derived without them.
     working = None
+    inconsistent = False
     if waiting is not None or retry_wait is not None:
         working = round(total - (waiting or 0.0) - (retry_wait or 0.0), 1)
+        if working < 0:
+            # Server-side waits exceed the client's total (e.g. an abandoned request whose
+            # queue wait kept running until the server noticed the disconnect). The three
+            # cannot partition the client total; working is left blank (not derivable),
+            # never clamped to 0, and the inconsistency is reported to the caller.
+            inconsistent = True
+            if diagnostics is not None:
+                diagnostics.update({"working_ms_raw": working, "client_total_ms": total,
+                                    "waiting_ms": waiting, "retry_wait_ms": retry_wait})
+            working = None
+    if diagnostics is not None:
+        diagnostics["partition_inconsistent"] = inconsistent
     row.update({
         "run_id": extra.get("run_id", row["run_id"]),
         "seed": extra.get("seed", ""),

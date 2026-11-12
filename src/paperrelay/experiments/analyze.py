@@ -82,8 +82,20 @@ def load_run(path: Path) -> Run:
     run_dir = csv_path.parent
     meta_path = run_dir / "scenario_meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-    return Run(path=run_dir, rows=read_csv(csv_path), scenario_meta=meta,
-               run_events=read_jsonl(run_dir / "run_events.jsonl"))
+    events = read_jsonl(run_dir / "run_events.jsonl")
+    # A load run that did not complete leaves a partial results.csv (rows only for requests
+    # that finished). Tables over it would silently drop requests, so refuse. Runs that
+    # predate results_status.json (and fixtures) carry no status and are accepted as before.
+    status_path = run_dir / "results_status.json"
+    statuses = [e.get("run_status") for e in events
+                if e.get("kind") == "run_end" and "run_status" in e]
+    if status_path.exists():
+        statuses.append(json.loads(status_path.read_text(encoding="utf-8")).get("run_status"))
+    bad = sorted({str(s) for s in statuses if s != "completed"})
+    if bad:
+        raise AnalysisError(f"{run_dir}: run_status {bad}; results.csv is partial, refusing "
+                            f"to build tables from it")
+    return Run(path=run_dir, rows=read_csv(csv_path), scenario_meta=meta, run_events=events)
 
 
 def is_sent(row: dict[str, str]) -> bool:

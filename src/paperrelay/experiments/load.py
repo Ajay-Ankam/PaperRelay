@@ -8,6 +8,13 @@ stand-in processes. Every scheduled request yields exactly one results.csv row: 
 refused, rate-limited, errored, abandoned by the client (status timeout, reason
 client_abandoned) and never sent (status error, reason not_sent:<why>, blank send time).
 
+Rows are appended to results.csv (and client_observations.jsonl) as each request reaches a
+terminal state; at completion the file is verified (one row per scheduled request) and
+atomically rewritten in schedule order with the server-record join. results_status.json
+and the run_end event carry run_status: completed, interrupted (cancelled) or failed; a
+results_status.json still saying in_progress means the runner was killed. Only
+`completed` means results.csv is complete.
+
 Clocks: scheduling and client durations use time.perf_counter(); wall-clock UTC is
 recorded for start times. arrival_lag_ms = actual send - scheduled send; a lag above the
 scenario's lag_threshold_ms is a scheduling failure (recorded in client_observations.jsonl
@@ -52,6 +59,7 @@ from paperrelay.experiments.scenario import (
 )
 
 SCHEDULE_LEAD_S = 0.5
+RESULTS_STATUS = "results_status.json"
 
 
 class LoadError(RuntimeError):
@@ -112,6 +120,64 @@ def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
         fh.write(json.dumps(record, default=str) + "\n")
 
 
+def write_csv_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    write_csv(tmp, rows)
+    os.replace(tmp, path)
+
+
+def _write_status(run_dir: Path, record: dict[str, Any]) -> None:
+    tmp = run_dir / (RESULTS_STATUS + ".tmp")
+    tmp.write_text(json.dumps(record, indent=2, default=str), encoding="utf-8")
+    os.replace(tmp, run_dir / RESULTS_STATUS)
+
+
+class IncrementalResults:
+    """results.csv and client_observations.jsonl, appended one record per request as soon
+    as it is terminal. Each append opens, writes and closes (flushing to the OS), so a
+    killed or cancelled runner keeps every finished row. No fsync: that would block the
+    event loop that schedules arrivals; the guarantee covers process death, not OS crash."""
+
+    def __init__(self, run_dir: Path):
+        self.run_dir = run_dir
+        self.csv_path = run_dir / "results.csv"
+        self.obs_path = run_dir / "client_observations.jsonl"
+        self.row_ids: list[str] = []
+        self.obs_ids: set[str] = set()
+        with open(self.csv_path, "x", newline="", encoding="utf-8") as fh:  # never overwrite
+            csv.DictWriter(fh, fieldnames=COLUMNS).writeheader()
+
+    def add_row(self, row: dict[str, Any]) -> None:
+        with open(self.csv_path, "a", newline="", encoding="utf-8") as fh:
+            csv.DictWriter(fh, fieldnames=COLUMNS).writerow(row)
+        self.row_ids.append(str(row["request_id"]))
+
+    def add_obs(self, request_id: str, record: dict[str, Any]) -> None:
+        _append_jsonl(self.obs_path, record)
+        self.obs_ids.add(request_id)
+
+    def verify_complete(self, expected: list[str]) -> None:
+        """The incremental file (read back from disk) has exactly one row per scheduled
+        request before it is replaced by the schedule-ordered final file."""
+        with open(self.csv_path, newline="", encoding="utf-8") as fh:
+            on_disk = [r["request_id"] for r in csv.DictReader(fh)]
+        if sorted(on_disk) != sorted(expected) or len(set(on_disk)) != len(on_disk):
+            raise LoadError(f"incremental results.csv has {len(on_disk)} rows "
+                            f"({len(set(on_disk))} distinct ids) for {len(expected)} "
+                            f"scheduled requests")
+
+
+@dataclass
+class _Progress:
+    """What the interruption handler needs, filled in as the run advances."""
+    planned: int = 0
+    t0: float = 0.0
+    revision_start: str = ""
+    writer: IncrementalResults | None = None
+    events_path: Path | None = None
+    tasks: list[asyncio.Task[Any]] = field(default_factory=list)
+
+
 async def _post_json(client: httpx.AsyncClient, url: str, body: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"url_path": httpx.URL(url).path, "body": body,
                            "client_utc_sent": utc_now()}
@@ -157,8 +223,58 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
                    transport: httpx.AsyncBaseTransport | None = None,
                    standin_transport: httpx.AsyncBaseTransport | None = None,
                    run_meta_extra: dict[str, Any] | None = None) -> LoadResult:
+    """Run the scenario. If this coroutine is cancelled (e.g. by the orchestrator's
+    wall-clock limit) or fails after results.csv was created, results.csv keeps every row
+    already written, and run_end / results_status.json record run_status interrupted or
+    failed: the file is then partial (no rows are invented for unfinished requests)."""
+    prog = _Progress()
+    try:
+        return await _run_load(scenario, prog, api=api, out_dir=out_dir,
+                               standin_url=standin_url, transport=transport,
+                               standin_transport=standin_transport,
+                               run_meta_extra=run_meta_extra)
+    except BaseException as exc:
+        await _record_interruption(prog, exc)
+        raise
+
+
+async def _cancel_all(tasks: list[asyncio.Task[Any]]) -> None:
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _record_interruption(prog: _Progress, exc: BaseException) -> None:
+    await _cancel_all([t for t in prog.tasks if not t.done()])
+    if prog.writer is None or prog.events_path is None:
+        return  # failed before results.csv was created: nothing partial to label
+    run_status = ("interrupted" if isinstance(exc, asyncio.CancelledError | KeyboardInterrupt)
+                  else "failed")
+    rec: dict[str, Any] = {
+        "kind": "run_end", "run_status": run_status, "error": repr(exc)[:300],
+        "results_csv": "partial", "rows_written": len(prog.writer.row_ids),
+        "scheduled": prog.planned,
+        "note": "results.csv holds one row per request that reached a terminal state before "
+                "the run stopped (client-side values, no server-record join); unfinished "
+                "and unsent requests have no row",
+        **_revisions(prog.revision_start, git_revision())}
+    rec = {"offset_s": round(time.perf_counter() - prog.t0, 4), "utc": utc_now(), **rec}
+    _append_jsonl(prog.events_path, rec)
+    _write_status(prog.writer.run_dir, {k: v for k, v in rec.items() if k != "kind"})
+
+
+def _revisions(start: str, end: str) -> dict[str, Any]:
+    return {"revision_start": start, "revision_end": end,
+            "revision_changed_during_run": start != end}
+
+
+async def _run_load(scenario: Scenario, prog: _Progress, *, api: str, out_dir: Path | None,
+                    standin_url: str | None, transport: httpx.AsyncBaseTransport | None,
+                    standin_transport: httpx.AsyncBaseTransport | None,
+                    run_meta_extra: dict[str, Any] | None) -> LoadResult:
     questions = scenario.questions()
     planned = plan(scenario, questions)
+    prog.planned = len(planned)
     limits = httpx.Limits(max_connections=scenario.requests + 8,
                           max_keepalive_connections=scenario.requests + 8)
     # Per-operation backstop only; abandonment is the whole-request deadline in stream_ask.
@@ -186,6 +302,7 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
         if (run_dir / "run_meta.json").exists():
             server_meta = json.loads((run_dir / "run_meta.json").read_text(encoding="utf-8"))
         capacity_start = await _get_json(client, "/capacity")
+        prog.revision_start = git_revision()
 
         extra_base = {
             "run_id": run_id, "seed": scenario.seed, "offered_window_s": scenario.window_s,
@@ -197,6 +314,7 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
         # is not charged to the first arrivals' lag.
         t0 = time.perf_counter() + SCHEDULE_LEAD_S
         t0_utc = datetime.now(UTC) + timedelta(seconds=SCHEDULE_LEAD_S)
+        prog.t0 = t0
         scenario_meta = {
             "scenario": scenario.raw, "scenario_path": scenario.path,
             "scenario_hash": scenario.scenario_hash, "seed": scenario.seed,
@@ -205,7 +323,11 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
             "client_timeout_s": scenario.client_timeout_s,
             "calibration_file": file_id(scenario.calibration_file),
             "questions_file": file_id(scenario.questions_file),
-            "runner_commit": git_revision(), "server_config": meta,
+            "runner_commit": prog.revision_start, "revision_start": prog.revision_start,
+            "revision_end_note": "revision_end and revision_changed_during_run are recorded "
+                                 f"in the run_end event and {RESULTS_STATUS}",
+            "results_status_file": RESULTS_STATUS,
+            "server_config": meta,
             "server_run_meta": {k: server_meta.get(k) for k in
                                 ("pipeline_commit", "config_hash", "source", "model",
                                  "started_utc")},
@@ -218,6 +340,14 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
         }
         (run_dir / "scenario_meta.json").write_text(json.dumps(scenario_meta, indent=2),
                                                     encoding="utf-8")
+        _write_status(run_dir, {
+            "run_status": "in_progress", "results_csv": "incremental",
+            "scheduled": len(planned), "revision_start": prog.revision_start,
+            "note": "rows are appended as requests finish; this status is replaced when the "
+                    "run completes or is interrupted. If it still says in_progress, the "
+                    "runner was killed and results.csv is partial."})
+        writer = IncrementalResults(run_dir)
+        prog.writer = writer
         events_path = run_dir / "run_events.jsonl"
         run_events: list[dict[str, Any]] = []
 
@@ -227,8 +357,25 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
             _append_jsonl(events_path, rec)
 
         event({"kind": "run_start", "run_id": run_id, "scenario": scenario.name})
+        prog.events_path = events_path
         state: dict[int, dict[str, Any]] = {}
         results: dict[int, tuple[dict[str, Any], dict[str, Any] | None]] = {}
+
+        def extra_for(p: Planned) -> dict[str, Any]:
+            extra = {**extra_base, "scheduled_start_time":
+                     (t0_utc + timedelta(seconds=p.offset_s)).isoformat()}
+            st = state.get(p.index)
+            if st is not None:
+                extra["arrival_lag_ms"] = round(st["lag_ms"], 1)
+            return extra
+
+        def obs_record(p: Planned, obs: dict[str, Any],
+                       terminal: dict[str, Any] | None) -> dict[str, Any]:
+            lag = state[p.index]["lag_ms"]
+            return {**obs, "scenario": scenario.name, "question_id": p.question_id,
+                    "scheduled_offset_s": p.offset_s, "arrival_lag_ms": lag,
+                    "scheduling_failure": lag > scenario.lag_threshold_ms,
+                    "terminal": terminal}
 
         async def fire(p: Planned) -> None:
             scheduled = t0 + p.offset_s
@@ -245,6 +392,12 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
                 retrieval_setting=scenario.retrieval_setting,
                 timeout_s=scenario.client_timeout_s, t_ref=t0)
             results[p.index] = (obs, terminal)
+            # On disk as soon as the request is terminal. The server-record join (for
+            # requests without a client-side terminal payload) happens at completion, when
+            # results.csv is rewritten in schedule order.
+            writer.add_row(build_row(obs, terminal, meta, None, scenario=scenario.name,
+                                     question_id=p.question_id, extra=extra_for(p)))
+            writer.add_obs(p.request_id, obs_record(p, obs, terminal))
 
         async def control(action: ControlAction) -> None:
             await sleep_until(t0 + action.at_s)
@@ -266,9 +419,16 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
         tasks = [asyncio.create_task(fire(p)) for p in planned]
         controls = [asyncio.create_task(control(a)) for a in scenario.control_actions]
         poller = asyncio.create_task(poll_capacity())
+        prog.tasks = [*tasks, *controls, poller]
         hard_stop = scenario.max_runtime_s - scenario.server_record_wait_s
-        done, pending = await asyncio.wait(tasks + controls,
-                                           timeout=max(1.0, hard_stop))
+        try:
+            done, pending = await asyncio.wait(tasks + controls,
+                                               timeout=max(1.0, hard_stop))
+        except BaseException:
+            # Cancel requests while the HTTP client is still open, so closing the client
+            # cannot turn in-flight requests into transport-error rows.
+            await _cancel_all(prog.tasks)
+            raise
         cap_hit = bool(pending)
         for t in pending:
             t.cancel()
@@ -288,48 +448,65 @@ async def run_load(scenario: Scenario, *, api: str, out_dir: Path | None = None,
     if server_dir is not None and server_dir.exists():
         records = await await_server_records(server_dir, sent_ids, scenario.server_record_wait_s)
     rows: list[dict[str, Any]] = []
+    inconsistent: list[str] = []
+    written = set(writer.row_ids)
     for p in planned:
-        extra = {**extra_base,
-                 "scheduled_start_time": (t0_utc + timedelta(seconds=p.offset_s)).isoformat()}
+        extra = extra_for(p)
         st = state.get(p.index)
         if st is None:
-            rows.append(not_sent_row(
+            row = not_sent_row(
                 request_id=p.request_id, scenario=scenario.name, question_id=p.question_id,
                 retrieval_setting=scenario.retrieval_setting,
                 reason="not_sent:runner_runtime_cap" if cap_hit else "not_sent:task_failed",
-                meta=meta, extra=extra))
-            continue
-        extra["arrival_lag_ms"] = round(st["lag_ms"], 1)
-        if p.index in results:
-            obs, terminal = results[p.index]
+                meta=meta, extra=extra)
         else:
-            # Sent but still running when the runner cap fired (or the task crashed).
-            obs = {"request_id": p.request_id, "retrieval_setting": scenario.retrieval_setting,
-                   "start_time": (t0_utc + timedelta(seconds=st["send_perf"] - t0)).isoformat(),
-                   "first_token_ms": None, "events": [],
-                   "total_ms": (cap_offset - (st["send_perf"] - t0)) * 1000,
-                   "client_reason": "runner_runtime_cap" if cap_hit else "client_task_failed"}
-            terminal = None
-        row = build_row(obs, terminal, meta, records.get(p.request_id),
-                        scenario=scenario.name, question_id=p.question_id, extra=extra)
-        if obs.get("client_reason") == "runner_runtime_cap":
-            row["status"], row["outcome_reason"] = "timeout", "runner_runtime_cap"
+            if p.index in results:
+                obs, terminal = results[p.index]
+            else:
+                # Sent but still running when the runner cap fired (or the task crashed).
+                obs = {"request_id": p.request_id,
+                       "retrieval_setting": scenario.retrieval_setting,
+                       "start_time": (t0_utc + timedelta(seconds=st["send_perf"] - t0)
+                                      ).isoformat(),
+                       "first_token_ms": None, "events": [],
+                       "total_ms": (cap_offset - (st["send_perf"] - t0)) * 1000,
+                       "client_reason": "runner_runtime_cap" if cap_hit
+                       else "client_task_failed"}
+                terminal = None
+            diag: dict[str, Any] = {}
+            row = build_row(obs, terminal, meta, records.get(p.request_id),
+                            scenario=scenario.name, question_id=p.question_id, extra=extra,
+                            diagnostics=diag)
+            if obs.get("client_reason") == "runner_runtime_cap":
+                row["status"], row["outcome_reason"] = "timeout", "runner_runtime_cap"
+            if diag.get("partition_inconsistent"):
+                inconsistent.append(p.request_id)
+                event({"kind": "partition_inconsistent", "request_id": p.request_id,
+                       "status": row["status"], "outcome_reason": row["outcome_reason"],
+                       **diag, "working_ms_in_results": "blank (not derivable)"})
+            if p.request_id not in writer.obs_ids:
+                writer.add_obs(p.request_id, {
+                    **obs_record(p, obs, terminal),
+                    "partition_inconsistent": bool(diag.get("partition_inconsistent"))})
         rows.append(row)
-        _append_jsonl(run_dir / "client_observations.jsonl", {
-            **obs, "scenario": scenario.name, "question_id": p.question_id,
-            "scheduled_offset_s": p.offset_s, "arrival_lag_ms": st["lag_ms"],
-            "scheduling_failure": st["lag_ms"] > scenario.lag_threshold_ms,
-            "terminal": terminal})
-    write_csv(run_dir / "results.csv", rows)
+        if p.request_id not in written:
+            writer.add_row(row)  # unsent / cap-hit / crashed: on disk before the rewrite
+    if len(rows) != len(planned):
+        raise LoadError("internal: row count differs from scheduled count")
+    writer.verify_complete([p.request_id for p in planned])
+    write_csv_atomic(run_dir / "results.csv", rows)
     missing = sorted(sent_ids - set(records)) if server_dir is not None else []
-    end = {"kind": "run_end", "rows": len(rows), "sent": len(sent_ids),
+    end = {"kind": "run_end", "run_status": "completed", "results_csv": "complete",
+           "rows": len(rows), "sent": len(sent_ids),
            "not_sent": len(planned) - len(sent_ids), "runtime_cap_hit": cap_hit,
-           "server_records_missing": missing, "capacity_at_end": capacity_end}
+           "server_records_missing": missing, "capacity_at_end": capacity_end,
+           "partition_inconsistent": inconsistent,
+           **_revisions(prog.revision_start, git_revision())}
     end = {"offset_s": round(time.perf_counter() - t0, 4), "utc": utc_now(), **end}
     run_events.append(end)
     _append_jsonl(events_path, end)
-    if len(rows) != len(planned):
-        raise LoadError("internal: row count differs from scheduled count")
+    _write_status(run_dir, {k: v for k, v in end.items()
+                            if k not in ("kind", "capacity_at_end")})
     return LoadResult(rows=rows, run_dir=run_dir, run_events=run_events)
 
 

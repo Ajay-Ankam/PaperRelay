@@ -62,7 +62,29 @@ def standin_config(scenario: Scenario) -> dict[str, Any]:
         if not path.exists():
             raise RunError(f"stand-in base config {path} not found")
         base = json.loads(path.read_text(encoding="utf-8"))
-    return deep_merge(base, scenario.standin_config)
+    cfg = deep_merge(base, scenario.standin_config)
+    if scenario.calibration_file:
+        # The stand-in must load the same calibration file whose hash scenario_meta records.
+        given = scenario.standin_config.get("calibration")
+        if given is not None and resolve(str(given)).resolve() != resolve(
+                scenario.calibration_file).resolve():
+            raise RunError(f"scenario standin_config.calibration {given!r} differs from "
+                           f"calibration_file {scenario.calibration_file!r}")
+        cfg["calibration"] = scenario.calibration_file
+    override = scenario.standin_config.get("limits")
+    if isinstance(override, dict) and "notes" not in scenario.standin_config:
+        # A base-config note describing the base limits would misdescribe this run.
+        notes = [n for n in cfg.get("notes", [])
+                 if not str(n).lstrip().lower().startswith("limits")]
+        notes.append(
+            f"Limits: effective {json.dumps(cfg.get('limits'), sort_keys=True)} = scenario "
+            f"{scenario.name!r} standin_config.limits {json.dumps(override, sort_keys=True)} "
+            f"merged over the base config ({scenario.standin_config_base or 'none'}); the "
+            f"base config's limits note was removed because it described limits not used "
+            f"in this run. These are synthetic workload-scaled values unless the scenario "
+            f"says otherwise.")
+        cfg["notes"] = notes
+    return cfg
 
 
 def child_env(scenario: Scenario, *, run_id: str, run_dir: Path, evidence_root: Path,

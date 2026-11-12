@@ -199,11 +199,16 @@ def git_revision() -> str:
             ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=5,
         ).stdout.strip()
+        # Untracked (non-ignored) files under src/ can change the code that runs.
+        untracked_src = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "--", "src"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return "unknown"
     if not rev:
         return "unknown"
-    return f"{rev}-dirty" if dirty else rev
+    return f"{rev}-dirty" if dirty or untracked_src else rev
 
 
 def config_hash(settings: Settings, extra: dict[str, object]) -> str:

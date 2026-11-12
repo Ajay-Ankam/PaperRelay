@@ -131,12 +131,21 @@ async def test_open_loop_rows_one_per_scheduled_request(tmp_path):
     planned = load_mod.plan(sc, sc.questions())
     assert [r["request_id"] for r in rows] == [p.request_id for p in planned]
     assert len(result.rows) == 4 and {r["status"] for r in rows} == {"ok"}
+    events = [json.loads(x) for x in (tmp_path / "run_events.jsonl").read_text().splitlines()]
+    flagged = {e["request_id"] for e in events if e["kind"] == "partition_inconsistent"}
     for r in rows:
         assert float(r["arrival_lag_ms"]) >= 0
         assert r["offered_window_s"] == "0.4" and r["seed"] == "42"
         assert r["retries"] == "1" and r["queue_peak_observed"] == "2"
         assert float(r["waiting_ms"]) == 8.0 and float(r["retry_wait_ms"]) == 7.0
-        assert float(r["working_ms"]) == pytest.approx(float(r["total_ms"]) - 15.0, abs=0.11)
+        # The fake reports 15 ms of server waits; an in-process request can finish faster
+        # than that, in which case the partition is impossible: blank + flagged, never < 0.
+        if r["working_ms"] == "":
+            assert float(r["total_ms"]) <= 15.05 and r["request_id"] in flagged
+        else:
+            assert float(r["working_ms"]) == pytest.approx(float(r["total_ms"]) - 15.0,
+                                                           abs=0.11)
+            assert r["request_id"] not in flagged
         assert r["first_token_ms"] != "" and r["tokens_in"] == "10"
     sched = [datetime.fromisoformat(r["scheduled_start_time"]) for r in rows]
     gaps = [(b - a).total_seconds() for a, b in zip(sched, sched[1:], strict=False)]
