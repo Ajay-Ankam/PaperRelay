@@ -70,11 +70,25 @@ def _http_client(settings: Settings) -> httpx.AsyncClient:
     )
 
 
+# The offline double has no provider quota and reports no usage. A gate would keep every
+# worst-case reservation (unknown usage is never refunded) and refuse the next question
+# for a minute, so offline mode keeps admission control but disables the quota gate.
+UNLIMITED = Limits(rpm=10**6, tpm=10**12, rpd=10**9, tpd=10**15)
+
+
+def quota_gate_enabled(settings: Settings) -> bool:
+    return settings.provider != "offline"
+
+
 def build_capacity(settings: Settings) -> Capacity:
+    if quota_gate_enabled(settings):
+        quota = QuotaGate(Limits(settings.rpm, settings.tpm, settings.rpd, settings.tpd),
+                          settings.daily_state_path)
+    else:
+        quota = QuotaGate(UNLIMITED)  # in memory only: nothing persisted for the double
     return Capacity(
         admission=AdmissionController(settings.max_concurrency, settings.max_queue),
-        quota=QuotaGate(Limits(settings.rpm, settings.tpm, settings.rpd, settings.tpd),
-                        settings.daily_state_path),
+        quota=quota,
         chars_per_token=settings.chars_per_token,
     )
 
@@ -138,9 +152,12 @@ def build_components(settings: Settings) -> Components:
             "max_concurrency": settings.max_concurrency, "max_queue": settings.max_queue,
             "limits": {"rpm": settings.rpm, "tpm": settings.tpm, "rpd": settings.rpd,
                        "tpd": settings.tpd},
+            "quota_gate": ("enabled" if quota_gate_enabled(settings) else
+                           "disabled: offline double has no provider quota"),
             "limits_basis": "design-choice defaults below documented/header-advertised "
                             "values; not measured optimums",
-            "daily_state": str(settings.daily_state_path),
+            "daily_state": (str(settings.daily_state_path) if quota_gate_enabled(settings)
+                            else None),
             "daily_window": "UTC calendar day (local policy; Groq replenishes on a rolling basis)",
             "token_estimate": f"prompt chars / {settings.chars_per_token} + 4/message + "
                               "max_completion_tokens (assumption, not a tokenizer)",
