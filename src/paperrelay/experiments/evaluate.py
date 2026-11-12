@@ -78,7 +78,7 @@ class Budget:
 
 
 def load_questions(path: Path) -> list[dict[str, str]]:
-    with open(path, newline="", encoding="utf-8") as fh:
+    with open(path, newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
         missing = [c for c in QUESTION_COLUMNS if c not in (reader.fieldnames or [])]
         if missing:
@@ -109,7 +109,7 @@ def eval_request_id(run_id: str, question_id: str, setting: str) -> str:
 def read_results(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    with open(path, newline="", encoding="utf-8") as fh:
+    with open(path, newline="", encoding="utf-8-sig") as fh:
         return list(csv.DictReader(fh))
 
 
@@ -150,7 +150,7 @@ def write_grade_sheet(path: Path, results: list[dict[str, str]], answers: list[d
     """(Re)build the grading sheet, preserving grades/notes Ajay already entered."""
     previous: dict[str, dict[str, str]] = {}
     if path.exists():
-        with open(path, newline="", encoding="utf-8") as fh:
+        with open(path, newline="", encoding="utf-8-sig") as fh:
             previous = {r["request_id"]: r for r in csv.DictReader(fh)}
     by_id = {a["request_id"]: a for a in answers}
     rows = []

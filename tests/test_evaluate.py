@@ -195,6 +195,35 @@ def test_question_file_validation(tmp_path):
         ev.load_questions(p)
 
 
+def test_question_file_saved_with_utf8_bom_is_accepted(tmp_path):
+    # Excel "CSV UTF-8" and PowerShell Out-File -Encoding utf8 prepend a BOM; the first
+    # column must still be recognised as question_id.
+    plain = write_questions(tmp_path / "plain.csv")
+    bom = tmp_path / "bom.csv"
+    bom.write_bytes(b"\xef\xbb\xbf" + plain.read_bytes())
+    assert [r["question_id"] for r in ev.load_questions(bom)] == ["q1", "q2", "q3", "q4"]
+
+
+async def test_grades_in_a_bom_saved_sheet_survive_rebuild(tmp_path):
+    q = write_questions(tmp_path / "q.csv", n=1)
+    (tmp_path / "run").mkdir()
+    api = FakeAPI(tmp_path / "run")
+    s = await ev.evaluate(args_for(tmp_path, q, settings="small"),
+                          transport=httpx.MockTransport(api.handler))
+    path = Path(s["grades_path"])
+    with open(path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    rows[0]["answer_grade"] = "correct"
+    with open(path, "w", newline="", encoding="utf-8-sig") as fh:   # as Excel saves it
+        w = csv.DictWriter(fh, fieldnames=ev.GRADE_COLUMNS)
+        w.writeheader()
+        w.writerows(rows)
+    await ev.evaluate(args_for(tmp_path, q, settings="small"),
+                      transport=httpx.MockTransport(api.handler))
+    with open(path, newline="", encoding="utf-8") as fh:
+        assert next(csv.DictReader(fh))["answer_grade"] == "correct"
+
+
 def test_checked_in_template_has_only_placeholder_rows():
     from paperrelay.config import REPO_ROOT
 
